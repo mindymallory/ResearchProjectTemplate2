@@ -1,0 +1,3387 @@
+---
+_c---
+?merge---
+title: "FertiliserPrice"
+format: html
+editor: visual
+self-contained: true
+---
+
+# Load package and get data
+
+```{r}
+# options(scipen = 999)
+```
+
+```{r, warning=FALSE, message=FALSE}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(zoo)
+library(forecast)
+library(tseries)
+library(stargazer)
+
+
+
+replace_month <- function(date_string) {
+  month_mapping <- c("JANUARY" = "01", "FEBRUARY" = "02", "MARCH" = "03", 
+                    "APRIL" = "04", "MAY" = "05", "JUNE" = "06", 
+                    "JULY" = "07", "AUGUST" = "08", "SEPTEMBER" = "09", 
+                    "OCTOBER" = "10", "NOVEMBER" = "11", "DECEMBER" = "12")
+  for (month in names(month_mapping)) {
+    date_string <- gsub(month, month_mapping[[month]], date_string, ignore.case = TRUE)
+  }
+  return(date_string)
+}
+
+Annually_Real_Interest_Rate <- read_excel("Annually Real Interest Rate.xls", 
+    sheet = "Data", skip = 2)
+
+# didn't use this imf data 
+# Annually_Diesel_Price <- read_excel("Annually Diesel Price.xls", 
+#     skip = 2)
+
+Pink_sheet =  read_excel("PinkSheet.xlsx") 
+
+Urea_World = Pink_sheet %>% select("Urea") %>% mutate(Dates = seq(as.Date("2010-01-01"), as.Date("2024-03-01"), by = "month"))
+
+colnames(Urea_World) = c("WorldPrice", "Dates")
+
+Gas_World = Pink_sheet %>% select("Natural gas index") %>% mutate(Dates = seq(as.Date("2010-01-01"), as.Date("2024-03-01"), by = "month"))
+
+colnames(Gas_World) = c("GasPrice", "Dates")
+
+Ghana_fuel = read_excel("DieselPriceByCountry.xlsx") %>% filter(Country == "Ghana") %>% group_by(Year) %>% summarise(FuelPrice = mean(Diesel))
+
+Kenya_fuel = read_excel("DieselPriceByCountry.xlsx") %>% filter(Country == "Kenya") %>% group_by(Year) %>% summarise(FuelPrice = mean(Diesel))
+
+Malawi_fuel = read_excel("DieselPriceByCountry.xlsx") %>% filter(Country == "Malawi") %>% group_by(Year) %>% summarise(FuelPrice = mean(Diesel))
+
+Tanzania_fuel = read_excel("DieselPriceByCountry.xlsx") %>% filter(Country == "Tanzania") %>% group_by(Year) %>% summarise(FuelPrice = mean(Diesel))
+
+Zambia_fuel = read_excel("DieselPriceByCountry.xlsx") %>% filter(Country == "Zambia") %>% group_by(Year) %>% summarise(FuelPrice = mean(Diesel))
+
+Nigeria_fuel = read_excel("GasolineNigeria.xlsx")
+Nigeria_fuel$DateTime = as.Date(sub("T.*", "", Nigeria_fuel$DateTime))
+Nigeria_fuel = Nigeria_fuel %>% mutate(Year = year(DateTime)) %>% select(c("Year","Close")) %>% group_by(Year) %>% summarise(FuelPrice = mean(Close)) 
+
+# Assuming the initial data frame Nigeria_fuel
+Nigeria_fuel <- data.frame(
+  Year = c(2010, 2012, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024),
+  FuelPrice = c(0.4400000, 0.6200000, 0.5200000, 0.4425000, 0.4783333, 0.4541667, 0.4733333, 
+           0.4700000, 0.4050000, 0.4100000, 0.4283333, 0.6666667, 0.4800000)
+)
+
+# Generate full sequence of years
+full_years <- seq(min(Nigeria_fuel$Year), max(Nigeria_fuel$Year))
+
+# Merge with full sequence and interpolate missing values
+Nigeria_fuel_full <- data.frame(Year = full_years)
+Nigeria_fuel_full$Fuel <- approx(Nigeria_fuel$Year, Nigeria_fuel$FuelPrice, xout = Nigeria_fuel_full$Year)$y
+
+Nigeria_fuel = Nigeria_fuel_full
+
+Ghana_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Ghana") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Ghana_Interest = read_excel("Ghana_IR.xlsx")
+
+Kenya_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Kenya") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Malawi_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Malawi") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Nigeria_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Nigeria") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Tanzania_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Tanzania") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Zambia_Interest = Annually_Real_Interest_Rate %>% filter(Annually_Real_Interest_Rate$`Country Name` == "Tanzania") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 2, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Interest= value) %>%
+  select(-value)
+
+Ghana_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Ghana") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Kenya_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Kenya") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Malawi_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Malawi") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Nigeria_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Nigeria") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Tanzania_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Tanzania") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Zambia_Diesel = Annually_Diesel_Price %>% filter(Annually_Diesel_Price$`Country Name` == "Tanzania") %>%
+  select(c("2010", "2011", "2012", "2013", "2014", "2015", "2016", "2017", "2018", "2019", "2020", "2021", "2022")) %>% mutate_all(~ ifelse(is.na(.), 0, .)) %>% pivot_longer(cols = 1:13, names_to = "Year") %>%
+  mutate(Diesel= value) %>%
+  select(-value)
+
+Food_Ghana = read_excel("Ghana National Staple Food Price.xls") %>% filter(`Months Code` != 7021) %>% filter(Item == "Maize (corn)")
+
+Lcu_Usd_Ghana = read.csv("GHS=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date"))
+Lcu_Usd_Kenya = read.csv("KES=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date"))
+Lcu_Usd_Malawi = read.csv("MWK=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date"))
+Lcu_Usd_Nigeria = read.csv("NGN=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date"))
+Lcu_Usd_Tanzania = read.csv("TZS=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date"))
+Lcu_Usd_Zambia = read.csv("ZMW=X.csv") %>% mutate(Date = as.Date(Date)) %>% select(c("Close", "Date")) 
+Lcu_Usd_Zambia$Date = Lcu_Usd_Zambia$Date %>% as.Date()
+Lcu_Usd_Ghana$Date = Lcu_Usd_Ghana$Date %>% as.Date()
+
+monthly_dates <- seq(as.Date("2010-01-01"), as.Date("2024-02-01"), by = "month")
+
+Cpi = read_excel("cpi_index.xlsx") %>% mutate(Dates = as.Date(format(monthly_dates, "%Y-%m-01")))
+
+Cpi[Cpi == 0] <- NA
+
+Ghana_mz = read.csv("Ghana_mz.csv")
+Ghana_mz$Date = as.Date(Ghana_mz$Date, format = "%m/%d/%Y")
+Ghana_mz$Ghana..WHOLESALE..Accra..Maize..GHS.100.kg = Ghana_mz$Ghana..WHOLESALE..Accra..Maize..GHS.100.kg*10*0.92
+mean(is.na(Ghana_mz$Ghana..WHOLESALE..Accra..Maize..GHS.100.kg))
+Ghana_mz = Ghana_mz %>% mutate(Ghana..WHOLESALE..Accra..Maize..GHS.100.kg = na.approx(Ghana..WHOLESALE..Accra..Maize..GHS.100.kg))
+
+
+Kenya_mz = read.csv("Kenya_mz.csv")
+Kenya_mz$Date = as.Date(Kenya_mz$Date, format = "%m/%d/%Y")
+Kenya_mz$Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg = Kenya_mz$Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg*1000*0.92 
+mean(is.na(Kenya_mz$Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg))
+Kenya_mz = Kenya_mz %>% mutate(Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg = na.approx(Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg)) 
+
+Malawi_mz = read.csv("Malawi_mz.csv")
+Malawi_mz$Date = as.Date(Malawi_mz$Date, format = "%m/%d/%Y")
+Malawi_mz$Malawi..RETAIL..National.Average..Maize..MWK.Kg = Malawi_mz$Malawi..RETAIL..National.Average..Maize..MWK.Kg*1000*0.8 
+mean(is.na(Malawi_mz$Malawi..RETAIL..National.Average..Maize..MWK.Kg))
+Malawi_mz = Malawi_mz %>% mutate(Malawi..RETAIL..National.Average..Maize..MWK.Kg = na.approx(Malawi..RETAIL..National.Average..Maize..MWK.Kg)) 
+
+Nigeria_mz = read.csv("Nigeria_mz.csv")
+Nigeria_mz$Date = as.Date(Nigeria_mz$Date, format = "%m/%d/%Y")
+Nigeria_mz$Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg = Nigeria_mz$Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg*10*0.92 
+mean(is.na(Nigeria_mz$Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg))
+Nigeria_mz = Nigeria_mz %>% mutate(Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg = na.approx(Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg)) 
+
+Tanzania_mz = read.csv("Tanzania_mz.csv")
+Tanzania_mz$Date = as.Date(Tanzania_mz$Date, format = "%m/%d/%Y")
+Tanzania_mz$United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg = Tanzania_mz$United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg*10*0.92 
+mean(is.na(Tanzania_mz$United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg))
+Tanzania_mz = Tanzania_mz %>% mutate(United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg = na.approx(United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg)) 
+
+Zambia_mz = read.csv("Zambia_mz.csv")
+Zambia_mz$Date = as.Date(Zambia_mz$Date, format = "%m/%d/%Y")
+Zambia_mz$Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg = Zambia_mz$Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg*50*0.8 
+mean(is.na(Zambia_mz$Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg))
+Zambia_mz = Zambia_mz %>% mutate(Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg = na.approx(Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg)) 
+
+Ghana_mz_yield = read_excel("Ghana National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Kenya_mz_yield = read_excel("Kenya National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Malawi_mz_yield = read_excel("Malawi National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Nigeria_mz_yield = read_excel("Nigeria National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Tanzania_mz_yield = read_excel("Tanzania National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Zambia_mz_yield = read_excel("Zambia National Staple Food Yield.xls") %>% filter(Item == "Maize (corn)") %>% filter(Year >= 2010) %>% select(c("Year","Value"))
+
+Ghana_FR = read_excel("International_Liquidity_Total_Reser_Ghana.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+Kenya_FR = read_excel("International_Liquidity_Total_Reser_Kenya.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+Malawi_FR = read_excel("International_Liquidity_Total_Reser_Malawi.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+Nigeria_FR = read_excel("International_Liquidity_Total_Reser_Nigeria.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+Tanzania_FR = read_excel("International_Liquidity_Total_Reser-Tanzania.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+Zambia_FR = read_excel("International_Liquidity_Total_Reser_Zambia.xlsx") %>% pivot_longer(cols = "2010":"2023", names_to = "Year", values_to = "ForexRev") %>% select(c("Year","ForexRev"))
+
+# IMF data 
+Ghana_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Ghana") %>% select(c("Year","ForexRev"))
+
+Kenya_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Kenya") %>% select(c("Year","ForexRev"))
+
+Malawi_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Malawi") %>% select(c("Year","ForexRev"))
+
+Nigeria_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Nigeria") %>% select(c("Year","ForexRev"))
+
+Tanzania_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Tanzania") %>% select(c("Year","ForexRev"))
+
+Zambia_FR = read_excel("ForeExRev.xlsx") %>% filter(Country == "Zambia") %>% select(c("Year","ForexRev"))
+```
+
+# Election data
+
+```{r}
+df_elec_0 <- data.frame(
+  Year = c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023),
+  Ghana = c("", "", "", 1, "", "", "", 1, "", "", "", 1, "", 1),
+  Nigeria = c("", "", 1, "", "", "", 1, "", "", "", 1, "", "", 1),
+  Kenya = c("", 1, "", "", 1, "", "", "", 1, "", "", 1, "", ""),
+  Malawi = c("", "", "", "", "", 1, "", "", "", "", "", 1, "", ""),
+  Tanzania = c("", "", "", "", "", "", 1, "", "", "", "", "", "", ""),
+  Zambia = c("", "", 1, "", "", "", "", 1, "", "", "", "", 1, "")
+)
+
+df_elec_0[df_elec_0 == ""] <- 0
+
+df_elec_1 <- data.frame(
+  Year = c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023),
+  Ghana = c("", "", 1, "", "", "", 1, "", "", "", 1, "", 1, ""),
+  Nigeria = c("", 1, "", "", "", 1, "", "", "", 1, "", "", 1, ""),
+  Kenya = c(1, "", "", 1, "", "", "", 1, "", "", 1, "", "", ""),
+  Malawi = c("", "", "", "", 1, "", "", "", "", "", 1, "", "", ""),
+  Tanzania = c("", "", "", "", "", 1, "", "", "", "", "", "", "", ""),
+  Zambia = c("", 1, "", "", "", "", 1, "", "", "", "", 1, "", "")
+)
+
+df_elec_1[df_elec_1 == ""] <- 0
+```
+
+# Ghana Urea
+
+```{r}
+retail_prices_Ghana = read_excel("D:/Research/AfricanFertiliser/retail-prices-Ghana.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Ghana = retail_prices_Ghana %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates) 
+
+colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Ghana_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Ghana_avg = Urea_Ghana_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Ghana_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Ghana",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+
+```
+
+# Ghana Macro data (2010/6-2022/12)
+
+```{r}
+Ghana_GDP = read_excel("Ghana GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Ghana_GDP) = c("GDP", "Year")
+
+Lcu_Usd_Ghana[152,1] = 5.73
+Ghana = merge(Urea_Ghana_avg, Lcu_Usd_Ghana, by.x = "Dates", by.y = "Date", all.x = T)
+
+Ghana1 = Ghana %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Ghana")
+
+ggplot(data = Ghana, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Ghana Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Ghana Urea Price.png")
+
+Ghana =  merge(Ghana_GDP, Ghana, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Ghana")
+
+Ghana = merge(Ghana, Ghana_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Ghana = merge(Ghana, Cpi %>% select(c("Ghana", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Ghana = merge(Ghana,Ghana_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Ghana = merge(Ghana,df_elec_0 %>% select(c("Year","Ghana")), by.x = "Year", by.y = "Year", all.x = T)
+
+Ghana = merge(Ghana,df_elec_1 %>% select(c("Year","Ghana")), by.x = "Year", by.y = "Year", all.x = T)
+
+Ghana = merge(Ghana, Ghana_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Ghana = merge(Ghana, Ghana_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Ghana) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+```
+
+# Kenya Urea
+
+```{r}
+retail_prices_Kenya = read_excel("D:/Research/AfricanFertiliser/retail-prices-Kenya.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Kenya = retail_prices_Kenya %>% filter(`Fertilizer Product` == "Diammonium Phosphate") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d"))
+
+start_date <- min(Urea_Kenya$YM)
+end_date <- max(Urea_Kenya$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Kenya_avg = Urea_Kenya %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Kenya_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Kenya_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Kenya_avg = Urea_Kenya_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Kenya_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Kenya",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+
+```
+
+# Kenya Macro data (2010/3-2022/12)
+
+```{r}
+Kenya_GDP = read_excel("Kenya GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Kenya_GDP) = c("GDP", "Year")
+
+Kenya = merge(Urea_Kenya_avg, Lcu_Usd_Kenya, by.x = "Dates", by.y = "Date", all.x = T)
+
+Kenya1 = Kenya %>% mutate(NationalPriceUSD = NationalPrice*20/Close)%>% mutate(Country = "Kenya")
+
+ggplot(data = Kenya, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Kenya Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Kenya Urea Price.png")
+
+Kenya =  merge(Kenya_GDP, Kenya, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Kenya")
+
+Kenya = merge(Kenya, Kenya_Interest, by = "Year", all.x = T)
+
+Kenya = merge(Kenya, Cpi %>% select(c("Kenya", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Kenya = merge(Kenya,Kenya_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Kenya = merge(Kenya,df_elec_0 %>% select(c("Year","Kenya")), by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya,df_elec_1 %>% select(c("Year","Kenya")), by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya, Kenya_mz_yield, by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya, Kenya_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+
+colnames(Kenya) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+```
+
+# Malawi Urea
+
+```{r}
+retail_prices_Malawi = read_excel("D:/Research/AfricanFertiliser/retail-prices-Malawi.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Malawi = retail_prices_Malawi %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Malawi$YM)
+end_date <- max(Urea_Malawi$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Malawi_avg = Urea_Malawi %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Malawi_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Malawi_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Malawi_avg = Urea_Malawi_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Malawi_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Malawi",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+
+```
+
+# Malawi Macro data (2010/5-2020/12)
+
+```{r}
+Malawi_GDP = read_excel("Malawi GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Malawi_GDP) = c("GDP", "Year")
+
+Malawi = merge(Urea_Malawi_avg, Lcu_Usd_Malawi, by.x = "Dates", by.y = "Date", all.y = T)
+
+Malawi1 = Malawi %>% mutate(NationalPriceUSD = NationalPrice*20/Close)%>% mutate(Country = "Malawi")
+
+ggplot(data = Malawi, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Malawi Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Malawi Urea Price.png")
+
+Malawi =  merge(Kenya_GDP, Malawi, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Malawi")
+
+Malawi = merge(Malawi, Kenya_Interest, by = "Year", all.x = T)
+
+Malawi = merge(Malawi, Cpi %>% select(c("Malawi", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Malawi = merge(Malawi,Malawi_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Malawi = merge(Malawi,df_elec_0 %>% select(c("Year","Malawi")), by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi,df_elec_1 %>% select(c("Year","Malawi")), by.x = "Year", by.y = "Year", all.x = T) %>% arrange(Dates)
+
+Malawi = merge(Malawi, Malawi_mz_yield, by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi, Malawi_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+
+# Malawi = Malawi[1:128,]
+
+colnames(Malawi) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+```
+
+# Nigeria Urea
+
+```{r}
+retail_prices_Nigeria = read_excel("D:/Research/AfricanFertiliser/retail-prices-Nigeria.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Nigeria = retail_prices_Nigeria %>% filter(`Fertilizer Product` == "NPK 15-15-15") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Nigeria$YM)
+end_date <- max(Urea_Nigeria$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Nigeria_avg = Urea_Nigeria %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Nigeria_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Nigeria_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Nigeria_avg = Urea_Nigeria_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Nigeria_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Nigeria",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+```
+
+# Nigeria Macro data (2010/9-2022/12)
+
+```{r}
+Nigeria_GDP = read_excel("Nigeria GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Nigeria_GDP) = c("GDP", "Year")
+
+Nigeria = merge(Urea_Nigeria_avg, Lcu_Usd_Nigeria, by.x = "Dates", by.y = "Date", all.y = T)
+
+Nigeria1 = Nigeria %>% mutate(NationalPriceUSD = NationalPrice*20/Close)%>% mutate(Country = "Nigeria")
+
+ggplot(data = Nigeria, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Nigeria Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Nigeria Urea Price.png")
+
+Nigeria =  merge(Malawi_GDP, Nigeria, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Nigeria")
+
+Nigeria = merge(Nigeria, Malawi_Interest, by = "Year", all.x = T)
+
+Nigeria = merge(Nigeria, Cpi %>% select(c("Nigeria", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Nigeria = merge(Nigeria,Malawi_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Nigeria = merge(Nigeria,df_elec_0 %>% select(c("Year","Nigeria")), by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria = merge(Nigeria,df_elec_1 %>% select(c("Year","Nigeria")), by.x = "Year", by.y = "Year", all.x = T)%>% arrange(Dates)
+
+Nigeria = merge(Nigeria, Nigeria_mz_yield, by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria = merge(Nigeria, Nigeria_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+
+# Nigeria = Nigeria[82:245,]
+
+colnames(Nigeria) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+```
+
+# Tanzania Urea
+
+```{r}
+retail_prices_Tanzania = read_excel("D:/Research/AfricanFertiliser/retail-prices-Tanzania.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Tanzania = retail_prices_Tanzania %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Tanzania$YM)
+end_date <- max(Urea_Tanzania$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Tanzania_avg = Urea_Tanzania %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Tanzania_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Tanzania_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Tanzania_avg = Urea_Tanzania_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Tanzania_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Tanzania",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+
+```
+
+# Tanzania Macro data (2010/5-2020/11)
+
+```{r}
+Tanzania_GDP = read_excel("Tanzania GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Tanzania_GDP) = c("GDP", "Year")
+
+Tanzania = merge(Urea_Tanzania_avg, Lcu_Usd_Tanzania, by.x = "Dates", by.y = "Date", all.y = T)
+
+Tanzania1 = Tanzania %>% mutate(NationalPriceUSD = NationalPrice*20/Close)%>% mutate(Country = "Tanzania")
+
+ggplot(data = Tanzania, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Tanzania Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Tanzania Urea Price.png")
+
+Tanzania =  merge(Tanzania_GDP, Tanzania, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Tanzania")
+
+Tanzania = merge(Tanzania, Tanzania_Interest, by = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Cpi %>% select(c("Tanzania", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Tanzania = merge(Tanzania,Tanzania_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Tanzania = merge(Tanzania,df_elec_0 %>% select(c("Year","Tanzania")), by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania,df_elec_1 %>% select(c("Year","Tanzania")), by.x = "Year", by.y = "Year", all.x = T) %>% arrange(Dates)
+
+Tanzania = merge(Tanzania, Tanzania_mz_yield, by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+
+# Tanzania = Tanzania[78:245,]
+
+colnames(Tanzania) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+```
+
+# Zambia Urea
+
+```{r}
+retail_prices_Zambia = read_excel("D:/Research/AfricanFertiliser/retail-prices-Zambia.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Zambia = retail_prices_Zambia %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Zambia$YM)
+end_date <- max(Urea_Zambia$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Zambia_avg = Urea_Zambia %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Zambia_avg) = c("Dates", "NationalPrice")
+
+NAs = mean(is.na(Urea_Zambia_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+Urea_Zambia_avg = Urea_Zambia_avg %>% mutate(NationalPrice = na.approx(NationalPrice)) %>% mutate(Year = year(Dates), Month = month(Dates))
+
+ggplot(Urea_Zambia_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Zambia",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+```
+
+# Zambia Macro data (2013/4-2022/12)
+
+```{r}
+Zambia_GDP = read_excel("Zambia GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Zambia_GDP) = c("GDP", "Year")
+
+Zambia = merge(Urea_Zambia_avg, Lcu_Usd_Zambia, by.x = "Dates", by.y = "Date", all.y = T)
+
+Zambia1 = Zambia %>% mutate(NationalPriceUSD = NationalPrice*20/Close)%>% mutate(Country = "Zambia")
+
+ggplot(data = Zambia, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Zambia Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Zambia Urea Price.png")
+
+Zambia =  merge(Zambia_GDP, Zambia, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Zambia")
+
+Zambia = merge(Zambia, Zambia_Interest, by = "Year", all.x = T)
+
+
+Zambia = merge(Zambia, Cpi %>% select(c("Zambia", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Zambia = merge(Zambia,Zambia_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Zambia = merge(Zambia,df_elec_0 %>% select(c("Year","Zambia")), by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia,df_elec_1 %>% select(c("Year","Zambia")), by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia, Zambia_mz_yield, by.x = "Year", by.y = "Year", all.y = T)
+
+Zambia = merge(Zambia, Zambia_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+
+colnames(Zambia) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+```
+
+Run this in the end
+
+```{r}
+Kenya_GDP = read_excel("Kenya GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Kenya_GDP) = c("GDP", "Year")
+
+Kenya = merge(Urea_Kenya_avg, Lcu_Usd_Kenya, by.x = "Dates", by.y = "Date", all.x = T)
+
+Kenya1 = Kenya %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Kenya")
+
+ggplot(data = Kenya, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Kenya Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Kenya Urea Price.png")
+
+Kenya =  merge(Kenya_GDP, Kenya, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Kenya")
+
+Kenya = merge(Kenya, Kenya_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Kenya = merge(Kenya, Cpi %>% select(c("Kenya", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Kenya = merge(Kenya,Kenya_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Kenya = merge(Kenya,df_elec_0 %>% select(c("Year","Kenya")), by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya,df_elec_1 %>% select(c("Year","Kenya")), by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya, Kenya_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Kenya = merge(Kenya, Kenya_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Kenya) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+Malawi_GDP = read_excel("Malawi GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Malawi_GDP) = c("GDP", "Year")
+
+Malawi = merge(Urea_Malawi_avg, Lcu_Usd_Malawi, by.x = "Dates", by.y = "Date", all.x = T)
+
+Malawi1 = Malawi %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Malawi")
+
+ggplot(data = Malawi, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Malawi Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Malawi Urea Price.png")
+
+Malawi =  merge(Malawi_GDP, Malawi, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Malawi")
+
+Malawi = merge(Malawi, Malawi_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Malawi = merge(Malawi, Cpi %>% select(c("Malawi", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Malawi = merge(Malawi,Malawi_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Malawi = merge(Malawi,df_elec_0 %>% select(c("Year","Malawi")), by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi,df_elec_1 %>% select(c("Year","Malawi")), by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi, Malawi_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Malawi = merge(Malawi, Malawi_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Malawi) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+Nigeria_GDP = read_excel("Nigeria GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Nigeria_GDP) = c("GDP", "Year")
+
+Nigeria = merge(Urea_Nigeria_avg, Lcu_Usd_Nigeria, by.x = "Dates", by.y = "Date", all.x = T)
+
+Nigeria1 = Nigeria %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Nigeria")
+
+ggplot(data = Nigeria, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Nigeria Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Nigeria Urea Price.png")
+
+Nigeria =  merge(Nigeria_GDP, Nigeria, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Nigeria")
+
+Nigeria = merge(Nigeria, Nigeria_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Nigeria = merge(Nigeria, Cpi %>% select(c("Nigeria", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Nigeria = merge(Nigeria,Nigeria_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Nigeria = merge(Nigeria,df_elec_0 %>% select(c("Year","Nigeria")), by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria = merge(Nigeria,df_elec_1 %>% select(c("Year","Nigeria")), by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria = merge(Nigeria, Nigeria_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Nigeria = merge(Nigeria, Nigeria_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Nigeria) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+Tanzania_GDP = read_excel("Tanzania GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Tanzania_GDP) = c("GDP", "Year")
+
+Tanzania = merge(Urea_Tanzania_avg, Lcu_Usd_Tanzania, by.x = "Dates", by.y = "Date", all.x = T)
+
+Tanzania1 = Tanzania %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Tanzania")
+
+ggplot(data = Tanzania, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Tanzania Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Tanzania Urea Price.png")
+
+Tanzania =  merge(Tanzania_GDP, Tanzania, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Tanzania")
+
+Tanzania = merge(Tanzania, Tanzania_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Tanzania = merge(Tanzania, Cpi %>% select(c("Tanzania", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Tanzania = merge(Tanzania,Tanzania_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Tanzania = merge(Tanzania,df_elec_0 %>% select(c("Year","Tanzania")), by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania,df_elec_1 %>% select(c("Year","Tanzania")), by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Tanzania = merge(Tanzania, Tanzania_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Tanzania) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+
+Zambia_GDP = read_excel("Zambia GDP.xls") %>% filter(Year > 2009) %>% select(c("Value", "Year"))
+
+colnames(Zambia_GDP) = c("GDP", "Year")
+
+Zambia = merge(Urea_Zambia_avg, Lcu_Usd_Zambia, by.x = "Dates", by.y = "Date", all.x = T)
+
+Zambia1 = Zambia %>% mutate(NationalPriceUSD = NationalPrice*20/Close) %>% mutate(Country = "Zambia")
+
+ggplot(data = Zambia, aes(x=Dates,y=NationalPrice*20/Close)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Zambia Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Zambia Urea Price.png")
+
+Zambia =  merge(Zambia_GDP, Zambia, by = "Year", all.y = T) %>% arrange(Dates) %>% mutate(Country = "Zambia")
+
+Zambia = merge(Zambia, Zambia_Interest, by = "Year", all.x = T) %>% fill(Interest, .direction = "downup")
+
+Zambia = merge(Zambia, Cpi %>% select(c("Zambia", "Dates")), by.x = "Dates", by.y = "Dates", all.x = T)
+
+Zambia = merge(Zambia,Zambia_mz, by.x = "Dates", by.y = "Date", all.x = T)
+
+Zambia = merge(Zambia,df_elec_0 %>% select(c("Year","Zambia")), by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia,df_elec_1 %>% select(c("Year","Zambia")), by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia, Zambia_mz_yield, by.x = "Year", by.y = "Year", all.x = T) %>% fill(Value, .direction = "downup")
+
+Zambia = merge(Zambia, Zambia_FR, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Zambia) = c( "Year","Dates", "GDP", "NationalPrice", "Month", "ExchangeRate", "Country", "RealInterest", "CPI", "MaizePrice" , 'Electionlag', "Election","MaizeYield","ForexRev")
+```
+
+# African Fertilizer
+
+```{r}
+library(plm)
+
+Corrp = read_excel('P_Data_Extract_From_Worldwide_Governance_Indicators-Corruption.xlsx') 
+Corrp = Corrp %>% filter(Corrp$`Country Name` != 'Uganda') 
+Corrp = Corrp %>% filter(Corrp$`Series Name`=='Control of Corruption: Estimate') %>% pivot_longer(cols = c(4:16), names_to = "Year", values_to = "Corruption_Estimate") %>% select(c('Country Name', 'Year', 'Corruption_Estimate'))
+
+colnames(Corrp) = c('Country', 'Year', 'CorruptionEstimate')
+
+Corrp$CorruptionEstimate = Corrp$CorruptionEstimate  
+
+African_Fertilizer = rbind(Ghana,Kenya,Malawi,Nigeria,Tanzania,Zambia) 
+
+African_Fertilizer = merge(African_Fertilizer,Urea_World, by.x = "Dates",by.y = "Dates", all.x = T) 
+
+African_Fertilizer = merge(African_Fertilizer,Gas_World, by.x = "Dates",by.y = "Dates", all.x = T) 
+
+African_Fertilizer$NationalPrice = African_Fertilizer$NationalPrice * 20
+
+# Graph in LCU
+ggplot(data = African_Fertilizer, aes(x=Dates,y=NationalPrice/CPI, group=Country))+geom_line() + facet_wrap("Country", scales = "free_y") + ylab('National Price of Urea in Real LCU/t')
+
+ggplot(data = African_Fertilizer, aes(x=Dates,y=MaizePrice/CPI,group=Country))+geom_line() + facet_wrap("Country", scales = "free_y") + ylab('National Price of Maize in Real LCU/t')
+
+# Convert to price to USD 
+African_Fertilizer$NationalPrice = African_Fertilizer$NationalPrice/African_Fertilizer$ExchangeRate
+
+African_Fertilizer = African_Fertilizer %>% mutate(Wedge = asinh(NationalPrice - WorldPrice))
+
+African_Fertilizer$MaizePrice = African_Fertilizer$MaizePrice/African_Fertilizer$ExchangeRate
+
+African_Fertilizer$UreaMaizeRatio = African_Fertilizer$NationalPrice/African_Fertilizer$MaizePrice
+
+African_Fertilizer = African_Fertilizer %>% mutate(LagMaize = dplyr::lag(MaizePrice,1))
+
+African_Fertilizer = African_Fertilizer %>% mutate(cy = paste(Country,Year))
+# 
+Corrp = Corrp %>% mutate(cy = paste(Country,Year)) %>% select(c('cy', 'CorruptionEstimate'))
+# 
+African_Fertilizer = merge(African_Fertilizer, Corrp, by = 'cy', all.x = T)
+
+African_Fertilizer %>% write.csv("FertiliserPanelFull.csv")
+#Graphs in USD
+
+#Wedge
+ggplot(data = African_Fertilizer, aes(x=Dates,y=Wedge,group=Country))+geom_line() + facet_wrap("Country") + ylab('National Price - World Price of Urea in USD/t') #, scales = "free_y"
+
+ggsave("Wedge.png")
+
+#Urea USD
+ggplot(data = African_Fertilizer, aes(x=Dates,y=NationalPrice,group=Country))+geom_line() + facet_wrap("Country") + ylab('National Price of Urea in USD/t')#, scales = "free_y"
+
+#Mazie USD
+ggplot(data = African_Fertilizer, aes(x=Dates,y=MaizePrice,group=Country))+geom_line() + facet_wrap("Country") + ylab('National Price of Maize in USD/t')
+
+#Urea/Mazie Ratio
+ggplot(data = African_Fertilizer, aes(x=Dates,y=UreaMaizeRatio,group=Country))+geom_line() + facet_wrap("Country")
+
+#World Urea USD
+
+ggplot(data = Urea_World, aes(x=Dates,y=WorldPrice))+geom_line() + ylab('World Price of Urea in USD/t')+ scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ylim(0, 1000)+
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("World Urea.png")
+
+African_Fertilizer <- data.frame(lapply(African_Fertilizer, function(x) na.locf(x, na.rm = FALSE)))
+```
+
+# Summary Stats
+
+```{r}
+# Load the data
+data <- read.csv("SummaryStats.csv")
+
+SummaryNames = colnames(data)
+
+# Calculate mean and standard deviation
+summary_stats <- data %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+# Transpose the data for a better format
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+# Separate variable names
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+# Split Mean and StdDev into separate columns
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+# Pivot the data to a tidy format
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+# Write the summary statistics to a CSV file
+write.csv(summary_stats_final, "SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+```
+
+# Country model
+
+```{r}
+# library(stargazer)
+# 
+ African_Fertilizer3 = African_Fertilizer %>% na.omit() %>% arrange(Country, Dates)
+#
+ 
+ African_Fertilizer3$NationalPrice = African_Fertilizer3$NationalPrice*African_Fertilizer3$ExchangeRate
+ 
+ 
+ African_Fertilizer3 %>% write.csv("FertiliserPanel.csv")
+FDvar = African_Fertilizer3 %>% select(c("ExchangeRate", "CPI")) %>% apply(2, log) %>% apply(2, diff) %>% as.data.frame()
+# # 
+colnames(FDvar) = c("DiffExRate", "DiffCPI")
+#  
+African_Fertilizer3 = cbind(African_Fertilizer3[2:882,],FDvar)
+
+colnames(African_Fertilizer3) = c(
+  "cy", "Dates", "Year", "GDP", "LocalUreaPrice", "Month", "ExchangeRate", 
+  "Country", "RealInterest", "CPI", "LocalMaizePrice", "ElectionYr", 
+  "OneYrAfterElectionYr", "LocalMaizeYield", "ForexRev", "WorldUreaPrice", 
+  "WorldGasPrice", "Wedge", "UreaMaizeRatio", "LagMaize", "CorruptionControl", 
+  "ExchangeRateMovements", "CPIMovements"
+)
+
+fp = as.formula("log(LocalUreaPrice) ~ CPIMovements + log(GDP) + ExchangeRateMovements + log(ForexRev) +log(RealInterest) + log(WorldGasPrice) + log(WorldUreaPrice) + CorruptionControl  + lag(log(LocalMaizePrice)) + lag(log(LocalMaizeYield))   + ElectionYr + OneYrAfterElectionYr + Manufacturing + Importing + Blending  + Retailing") 
+
+fw =  as.formula("Wedge ~  CPIMovements + log(GDP) + ExchangeRateMovements + log(ForexRev) + log(RealInterest) + log(WorldGasPrice) + CorruptionControl  + lag(log(LocalMaizePrice)) + lag(log(LocalMaizeYield))   + ElectionYr + OneYrAfterElectionYr + Manufacturing + Importing + Blending  + Retailing") 
+```
+
+# Ghana more data
+
+```{r}
+Ghana_CR <- read_excel("Ghana_CR.xlsx")
+
+Ghana_IM = read_excel("Ghana_IM.xlsx") %>% group_by(Date) %>% summarise(MonthlyUreaImportMT = sum(Q)) %>% mutate(Dates = as.Date(Date))
+
+Ghana_IM <- Ghana_IM %>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% select(-"Date")
+
+Ghana_PS = read_excel("Ghana_PS.xlsx")
+
+Ghana_NF = read_excel("GhanaProd.xlsx")
+
+Ghana = African_Fertilizer3 %>% filter(Country == "Ghana")
+
+Ghana = merge(Ghana, Ghana_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Ghana = merge(Ghana, Ghana_IM, by.x = "Dates", by.y = "Dates", all.x = T)
+
+Ghana = merge(Ghana, Ghana_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+Ghana = merge(Ghana, Ghana_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Ghana <- Ghana %>% fill(FuelPrice, .direction = "downup")
+
+# Ghana$Import <- na.locf(Ghana$Import, na.rm = F)
+
+# fill na with previous
+Ghana <- Ghana %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+Ghana = merge(Ghana, Ghana_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+
+```
+
+# Kenya more data
+
+```{r}
+Kenya_CR <- data.frame(
+  Year = 2023:2010,
+  CR4ratioAnnual = c(67, 76, 66, 75, 63, 64, 78, 65, 80, 72, 66,66,66,66) / 100
+)
+
+Kenya_IM = read_excel("KenyaIM.xlsx") %>% mutate(Month = month(Month)) %>% mutate(ym = paste(Year,Month, sep = "-")) %>% group_by(ym) %>% summarise(MonthlyUreaImportMT = sum(`Quantity (t)`)) %>% mutate(Dates = as.Date(paste(ym, "01", sep = "-"), format = "%Y-%m-%d"))
+
+Kenya_IM <- Kenya_IM %>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% select(-"ym")
+
+Kenya_PS = read_excel("KenyaPrivateSupply.xlsx")
+
+Kenya_NF = read_excel("KenyaProd.xlsx")
+
+Kenya = African_Fertilizer3 %>% filter(Country == "Kenya")
+
+Kenya = merge(Kenya, Kenya_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya, Kenya_IM, by.x = "Dates", by.y = "Dates", all.x = T)
+
+Kenya = merge(Kenya, Kenya_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya = merge(Kenya, Kenya_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Kenya <- Kenya %>% fill(FuelPrice, .direction = "downup")
+
+# Kenya$Import <- na.locf(Kenya$Import, na.rm = F)
+
+Kenya <- Kenya %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+Kenya = merge(Kenya, Kenya_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+
+```
+
+# Malawi more data
+
+```{r}
+Malawi_CR <- read_excel("Malawi_CR.xlsx")
+
+Malawi_IM = read_excel("Malawi_IM.xlsx") %>% mutate(Month = month(Date)) %>% mutate(Year = year(Date)) %>% mutate(ym = paste(Year,Month, sep = "-")) %>% group_by(ym) %>% summarise(MonthlyUreaImportMT = sum(v)) %>% mutate(Dates = as.Date(paste(ym, "01", sep = "-"), format = "%Y-%m-%d"))
+
+Malawi_IM <- Malawi_IM %>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(MonthlyUreaImportMT = 1)) %>% select(-"ym")
+
+Malawi_PS = read_excel("Malawi_PS.xlsx")
+
+Malawi_NF = read_excel("MalawiProd.xlsx")
+
+Malawi = African_Fertilizer3 %>% filter(Country == "Malawi")
+
+Malawi = merge(Malawi, Malawi_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi, Malawi_IM, by.x = "Dates", by.y = "Dates", all.x = T)
+
+Malawi = merge(Malawi, Malawi_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi = merge(Malawi, Malawi_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Malawi <- Malawi %>% fill(FuelPrice, .direction = "downup")
+
+# Malawi$Import <- na.locf(Malawi$Import, na.rm = F)
+
+Malawi <- Malawi %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+Malawi = merge(Malawi, Malawi_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+
+```
+
+# Nigeria more data
+
+```{r}
+Nigeria_CR <- read_excel("Nigeria_CR.xlsx")
+
+Nigeria_IM = read_excel("Nigeria_IM.xlsx") %>% mutate(Month = month(Date)) %>% mutate(Year = year(Date)) %>% mutate(ym = paste(Year,Month, sep = "-")) %>% group_by(ym) %>% summarise(MonthlyUreaImportMT = sum(V)) %>% mutate(Dates = as.Date(paste(ym, "01", sep = "-"), format = "%Y-%m-%d"))
+
+Nigeria_IM <- Nigeria_IM %>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(MonthlyUreaImportMT = 1)) %>% select(-"ym")
+
+Nigeria_NF = read_excel("NigeriaProd.xlsx")
+
+Nigeria_PS = read_excel("Nigeria_PS.xlsx")
+
+Nigeria = African_Fertilizer3 %>% filter(Country == "Nigeria")
+
+Nigeria = merge(Nigeria, Nigeria_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria = merge(Nigeria, Nigeria_IM, by.x = "Dates", by.y = "Dates", all.x = T)
+
+Nigeria = merge(Nigeria, Nigeria_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+colnames(Nigeria_fuel) = c("Year","FuelPrice")
+
+Nigeria = merge(Nigeria, Nigeria_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria <- Nigeria %>% fill(FuelPrice, .direction = "downup")
+
+# Nigeria$Import <- na.locf(Nigeria$Import, na.rm = F)
+
+Nigeria <- Nigeria %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+Nigeria = merge(Nigeria, Nigeria_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+Nigeria$FuelPrice = Nigeria$FuelPrice * Nigeria$ExchangeRate
+```
+
+# Zambia and Tanzania more data
+
+```{r}
+Zambia_CR <- read_excel("Zambia_CR.xlsx")
+
+Zambia_IM = read_excel("Zambia_IM.xlsx") %>% group_by(Year) %>% summarise(MonthlyUreaImportMT = sum(vol)) 
+
+Zambia_PS = read_excel("Zambia_PS.xlsx")
+
+Zambia_NF = read_excel("ZambiaProd.xlsx")
+
+Zambia = African_Fertilizer3 %>% filter(Country == "Zambia")
+
+Zambia = merge(Zambia, Zambia_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia, Zambia_IM, by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia, Zambia_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia = merge(Zambia, Zambia_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Zambia <- Zambia %>% fill(FuelPrice, .direction = "downup")
+
+# Zambia$Import <- na.locf(Zambia$Import, na.rm = F)
+
+Zambia <- Zambia %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+Zambia = merge(Zambia, Zambia_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+
+Tanzania_CR <- data.frame(
+  Year = 2023:2010,
+  CR4ratioAnnual = c(75, 82, 84, 90, 92, 91, 90, 100, 75, 86, 66,66,66,66) / 100
+)
+
+Tanzania_IM = read_excel("TanzaniaIM.xlsx") %>% mutate(Month = month(Date)) %>% mutate(Year = year(Date)) %>% mutate(ym = paste(Year,Month, sep = "-")) %>% group_by(ym) %>% summarise(MonthlyUreaImportMT = sum(Quantity)) %>% mutate(Dates = as.Date(paste(ym, "01", sep = "-"), format = "%Y-%m-%d"))
+
+Tanzania_IM <- Tanzania_IM %>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(MonthlyUreaImportMT = 1)) %>% select(-"ym")
+
+Tanzania_PS = read_excel("Tanzania_PS.xlsx")
+
+Tanzania_NF = read_excel("TanzaniaProd.xlsx")
+
+Tanzania = African_Fertilizer3 %>% filter(Country == "Tanzania")
+
+Tanzania = merge(Tanzania, Tanzania_CR, by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_IM, by.x = "Dates", by.y = "Dates", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_PS, by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_NF, by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania = merge(Tanzania, Tanzania_fuel, by.x = "Year", by.y = "Year", all.x = T)
+
+Tanzania <- Tanzania %>% fill(FuelPrice, .direction = "downup")
+
+# Tanzania$Import <- na.locf(Tanzania$Import, na.rm = F)
+
+Tanzania <- Tanzania %>% fill(MonthlyUreaImportMT, .direction = "downup")
+
+```
+
+```{r}
+library(broom)
+
+African_Fertilizer4 = rbind(Ghana,Kenya,Malawi,Nigeria,Zambia,Tanzania)
+
+ # African_Fertilizer4$FuelPrice = African_Fertilizer4$FuelPrice/African_Fertilizer4$ExchangeRate
+ # 
+# African_Fertilizer4$LocalUreaPrice = African_Fertilizer4$LocalUreaPrice/African_Fertilizer4$ExchangeRate
+
+African_Fertilizer4$LocalMaizePrice = African_Fertilizer4$LocalMaizePrice * African_Fertilizer4$ExchangeRate
+
+African_Fertilizer4$WorldUreaPrice = African_Fertilizer4$WorldUreaPrice * African_Fertilizer4$ExchangeRate
+
+African_Fertilizer4$WorldGasPrice = African_Fertilizer4$WorldGasPrice * African_Fertilizer4$ExchangeRate 
+
+write.csv(African_Fertilizer4 ,"FullPanelData.csv")
+
+Ghana_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Ghana"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Ghana_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Ghana"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Kenya_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Kenya"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Kenya_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Kenya"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Malawi_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Malawi"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Malawi_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Malawi"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Nigeria_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Nigeria"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Nigeria_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Nigeria"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Zambia_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Zambia"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Zambia_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Zambia"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Tanzania_Pmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Tanzania"), log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+Tanzania_Wmod3 = lm(data = African_Fertilizer4 %>% filter(Country == "Tanzania"), Wedge ~  log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl)
+
+tidy_Ghana_P <- tidy(Ghana_Pmod3, conf.int = TRUE) %>% mutate(Model = "Ghana NationalPrice")
+tidy_Ghana_W <- tidy(Ghana_Wmod3, conf.int = TRUE) %>% mutate(Model = "Ghana Wedge")
+tidy_Kenya_P <- tidy(Kenya_Pmod3, conf.int = TRUE) %>% mutate(Model = "Kenya NationalPrice")
+tidy_Kenya_W <- tidy(Kenya_Wmod3, conf.int = TRUE) %>% mutate(Model = "Kenya Wedge")
+tidy_Malawi_P <- tidy(Malawi_Pmod3, conf.int = TRUE) %>% mutate(Model = "Malawi NationalPrice")
+tidy_Malawi_W <- tidy(Malawi_Wmod3, conf.int = TRUE) %>% mutate(Model = "Malawi Wedge")
+tidy_Nigeria_P <- tidy(Nigeria_Pmod3, conf.int = TRUE) %>% mutate(Model = "Nigeria NationalPrice")
+tidy_Nigeria_W <- tidy(Nigeria_Wmod3, conf.int = TRUE) %>% mutate(Model = "Nigeria Wedge")
+tidy_Tanzania_P <- tidy(Tanzania_Pmod3, conf.int = TRUE) %>% mutate(Model = "Tanzania NationalPrice")
+tidy_Tanzania_W <- tidy(Tanzania_Wmod3, conf.int = TRUE) %>% mutate(Model = "Tanzania Wedge")
+tidy_Zambia_P <- tidy(Zambia_Pmod3, conf.int = TRUE) %>% mutate(Model = "Zambia NationalPrice")
+tidy_Zambia_W <- tidy(Zambia_Wmod3, conf.int = TRUE) %>% mutate(Model = "Zambia Wedge")
+
+# Combine results into a single data frame
+results <- bind_rows(tidy_Ghana_P, tidy_Ghana_W,
+                     tidy_Kenya_P, tidy_Kenya_W,
+                     tidy_Malawi_P, tidy_Malawi_W,
+                     tidy_Nigeria_P, tidy_Nigeria_W,
+                     tidy_Tanzania_P, tidy_Tanzania_W,
+                     tidy_Zambia_P, tidy_Zambia_W)
+
+# Order terms based on their appearance
+results$term <- factor(results$term, levels = unique(results$term))
+
+# Function to create and save the plot for each model
+save_plot <- function(model_data, model_name) {
+  # Filter out the intercept term
+  model_data <- model_data %>% filter(term != "(Intercept)")
+  
+  # Add a column to indicate significance
+  model_data$Significant <- ifelse(model_data$p.value < 0.05, "Significant", "Not Significant")
+  
+  # Create the plot
+  p <- ggplot(model_data, aes(x = term, y = estimate, shape = Significant, color = Significant)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(
+         y = "Responses",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_hline(yintercept = 0, linetype = "dashed") + 
+    coord_flip()
+  
+  # Save the plot
+  ggsave(filename = paste0(model_name, ".png"), plot = p, width = 10, height = 6)
+}
+
+# Save plots for each model
+models <- list(Ghana_Pmod3 = tidy_Ghana_P, Ghana_Wmod3 = tidy_Ghana_W,
+               Kenya_Pmod3 = tidy_Kenya_P, Kenya_Wmod3 = tidy_Kenya_W,
+               Malawi_Pmod3 = tidy_Malawi_P, Malawi_Wmod3 = tidy_Malawi_W,
+               Nigeria_Pmod3 = tidy_Nigeria_P, Nigeria_Wmod3 = tidy_Nigeria_W,
+               Tanzania_Pmod3 = tidy_Tanzania_P, Tanzania_Wmod3 = tidy_Tanzania_W,
+               Zambia_Pmod3 = tidy_Zambia_P, Zambia_Wmod3 = tidy_Zambia_W)
+
+# Iterate over each model in the list
+for (model_name in names(models)) {
+  # Get the model data
+  model_data <- models[[model_name]]
+  
+  # Apply the operation to the term variable in the model data
+  model_data$term <- factor(model_data$term, levels = unique(model_data$term))
+  
+  # Update the model data in the list
+  models[[model_name]] <- model_data
+}
+
+
+
+for(model_name in names(models)) {
+  model_data <- models[[model_name]]
+  save_plot(model_data, model_name)
+}
+
+```
+
+new names
+
+```{r}
+library(broom)
+
+# Combine results into a single data frame
+results <- bind_rows(tidy_Ghana_P, tidy_Ghana_W,
+                     tidy_Kenya_P, tidy_Kenya_W,
+                     tidy_Malawi_P, tidy_Malawi_W,
+                     tidy_Nigeria_P, tidy_Nigeria_W,
+                     tidy_Tanzania_P, tidy_Tanzania_W,
+                     tidy_Zambia_P, tidy_Zambia_W)
+
+# Order terms based on their appearance
+results$term <- factor(results$term, levels = unique(results$term))
+
+# Function to create and save the plot for each model
+save_plot_p <- function(model_data, model_name) {
+  # Filter out the intercept term
+  model_data <- model_data %>% filter(term != "(Intercept)")
+  
+  # Add a column to indicate significance
+  model_data$Significant <- ifelse(model_data$p.value < 0.05, "Significant", "Not Significant")
+    
+  # Create the plot
+  p <- ggplot(model_data, aes(x = term, y = estimate, shape = Significant, color = Significant)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(
+         y = "Responses",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_hline(yintercept = 0, linetype = "dashed") + 
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World NPK Price", "World Natural Gas Price")))
+  
+  # Save the plot
+  ggsave(filename = paste0(model_name, ".png"), plot = p, width = 10, height = 6)
+}
+
+# Save plots for each model
+price_models <- list(Ghana_Pmod3 = tidy_Ghana_P, 
+                     Kenya_Pmod3 = tidy_Kenya_P, 
+                     Malawi_Pmod3 = tidy_Malawi_P, 
+                     Nigeria_Pmod3 = tidy_Nigeria_P, 
+                     Tanzania_Pmod3 = tidy_Tanzania_P, 
+                     Zambia_Pmod3 = tidy_Zambia_P)
+
+wedge_models <- list(Ghana_Wmod3 = tidy_Ghana_W, 
+                     Kenya_Wmod3 = tidy_Kenya_W, 
+                     Malawi_Wmod3 = tidy_Malawi_W, 
+                     Nigeria_Wmod3 = tidy_Nigeria_W, 
+                     Tanzania_Wmod3 = tidy_Tanzania_W, 
+                     Zambia_Wmod3 = tidy_Zambia_W)
+
+# Iterate over each model in the list
+for (model_name in names(price_models)) {
+  # Get the model data
+  model_data <- models[[model_name]]
+  
+  # Apply the operation to the term variable in the model data
+  model_data$term <- factor(model_data$term, levels = unique(model_data$term))
+  
+  # Update the model data in the list
+  models[[model_name]] <- model_data
+}
+
+
+
+for(model_name in names(price_models)) {
+  model_data <- models[[model_name]]
+  save_plot_p(model_data, model_name)
+}
+
+save_plot_w <- function(model_data, model_name) {
+  # Filter out the intercept term
+  model_data <- model_data %>% filter(term != "(Intercept)")
+  
+  # Add a column to indicate significance
+  model_data$Significant <- ifelse(model_data$p.value < 0.05, "Significant", "Not Significant")
+    
+  # Create the plot
+  p <- ggplot(model_data, aes(x = term, y = estimate, shape = Significant, color = Significant)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(
+         y = "Responses",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") +
+    geom_hline(yintercept = 0, linetype = "dashed") + 
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World Natural Gas Price")))
+  
+  # Save the plot
+  ggsave(filename = paste0(model_name, ".png"), plot = p, width = 10, height = 6)
+}
+
+
+# Iterate over each model in the list
+for (model_name in names(wedge_models)) {
+  # Get the model data
+  model_data <- models[[model_name]]
+  
+  # Apply the operation to the term variable in the model data
+  model_data$term <- factor(model_data$term, levels = unique(model_data$term))
+  
+  # Update the model data in the list
+  models[[model_name]] <- model_data
+}
+
+
+
+for(model_name in names(wedge_models)) {
+  model_data <- models[[model_name]]
+  save_plot_w(model_data, model_name)
+}
+```
+
+# More stats
+
+```{r}
+data <- African_Fertilizer4
+
+SummaryNames = colnames(data)
+
+# Calculate mean and standard deviation
+summary_stats <- data %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+# Transpose the data for a better format
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+# Separate variable names
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+# Split Mean and StdDev into separate columns
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+# Pivot the data to a tidy format
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+# Write the summary statistics to a CSV file
+write.csv(summary_stats_final, "SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+```
+
+# Panel UnitRoot Test
+
+```{r}
+# African_Fertilizer3 = African_Fertilizer3 %>% arrange(Dates)
+# # African_Fertilizer3[146:697,] %>%
+# UnitRootData =  African_Fertilizer3 %>% select(c("NationalPrice","ExchangeRate","CPI","MaizePrice","Wedge","WorldPrice","Country"))
+# 
+# NP = data.frame(split(UnitRootData$NationalPrice,UnitRootData$Country))
+# NPres = purtest(NP, pmax = 4, exo = "intercept", test = "madwu")
+# NPres
+# ER = data.frame(split(UnitRootData$ExchangeRate,UnitRootData$Country))
+# NPres = purtest(ER, pmax = 4, exo = "intercept", test = "madwu")
+# NPres
+# CPI = data.frame(split(UnitRootData$CPI,UnitRootData$Country))
+# CPIres = purtest(CPI, pmax = 4, exo = "intercept", test = "madwu")
+# CPIres
+# MP = data.frame(split(UnitRootData$MaizePrice,UnitRootData$Country))
+# MPres = purtest(MP, pmax = 4, exo = "intercept", test = "madwu")
+# MPres
+# WG = data.frame(split(UnitRootData$Wedge,UnitRootData$Country))
+# WGres = purtest(WG, pmax = 4, exo = "intercept", test = "madwu")
+# WGres
+# WP = data.frame(split(UnitRootData$WorldPrice,UnitRootData$Country))
+# WPres = purtest(WP, pmax = 4, exo = "intercept", test = "madwu")
+# WPres
+
+# UnitRootData =  African_Fertilizer4[171:716,] %>% select(c("Fuel","Country"))
+# NP = data.frame(split(UnitRootData$Fuel,UnitRootData$Country))
+# NPres = purtest(NP, pmax = 4, exo = "intercept", test = "madwu")
+# NPres
+```
+
+# Cross Country model
+
+```{r}
+library(plm)
+
+ P3_all = plm(data = African_Fertilizer4, log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+ # P3_all = plm(data = African_Fertilizer4, log(LocalUreaPrice) ~  log(WorldGasPrice) + log(WorldUreaPrice)  + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+# P3_all = plm(data = African_Fertilizer4, log(LocalUreaPrice) ~
+#                log(WorldGasPrice) +
+#                log(WorldUreaPrice) +
+#                log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert)  + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+tidy_Pall <- tidy(P3_all, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[1:15,])
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World Urea Price", "World Natural Gas Price")))
+
+ggsave("FullPriceModel.png", width = 10, height = 6)
+
+ W3_all = plm(data = African_Fertilizer4, Wedge ~ log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+ # W3_all = plm(data = African_Fertilizer4, Wedge ~ log(WorldGasPrice)  + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + ExchangeRateMovements + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+ # W3_all = plm(data = African_Fertilizer4, Wedge ~ log(WorldGasPrice) + log(FuelPrice) + lag(log(LocalMaizePrice)) + SharePrivateSectorSalesAnnual + log(MonthlyUreaImportMT) + log(NumFirmsImportingFert) + CPIMovements + log(GDP) + log(RealInterest) + log(ForexRev) + ElectionYr + OneYrAfterElectionYr + CorruptionControl  + factor(Year), index = "Country", model = "within")
+
+tidy_Wall <- tidy(W3_all, conf.int = TRUE) %>% mutate(Model = "Wedge")
+
+results <- rbind(tidy_Wall[1:14,])
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World Natural Gas Price")))
+
+ggsave("FullWedgeModel.png", width = 10, height = 6)
+
+r = bind_rows(tidy_Pall,tidy_Wall)
+write.csv(r,"CrossCountryModelCoefficients.csv")
+```
+
+# Summary Stats by Country
+
+```{r}
+African_Fertilizer4$LocalMaizePrice = African_Fertilizer4$LocalMaizePrice * African_Fertilizer4$ExchangeRate
+African_Fertilizer4$Wedge = African_Fertilizer4$LocalUreaPrice - African_Fertilizer4$WorldUreaPrice
+
+```
+
+```{r}
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == "Ghana") %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Ghana_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == 'Kenya') %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Kenya_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == 'Malawi') %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Malawi_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == 'Nigeria') %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Nigeria_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == 'Tanzania') %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Tanzania_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- African_Fertilizer4 %>% filter(Country == 'Zambia') %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Zambia_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+```
+
+```{r}
+summary_stats <- Ghana %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Ghana_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- Kenya %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Kenya_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- Malawi %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Malawi_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- Nigeria %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Nigeria_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- Tanzania %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Tanzania_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+
+summary_stats <- Zambia %>% select(all_of(SummaryNames)) %>%
+  summarise(across(everything(), list(
+    Mean = ~ mean(.x, na.rm = TRUE),
+    StdDev = ~ sd(.x, na.rm = TRUE)
+  )))
+
+summary_stats_t <- as.data.frame(t(summary_stats))
+
+summary_stats_t$Variable <- rownames(summary_stats_t)
+
+summary_stats_t <- summary_stats_t %>%
+  separate(Variable, into = c("Variable", "Statistic"), sep = "_")
+
+summary_stats_final <- summary_stats_t %>%
+  pivot_wider(names_from = Statistic, values_from = V1)
+
+write.csv(summary_stats_final, "Zambia_SummaryStats_Mean_StdDev.csv", row.names = FALSE)
+```
+
+# Fertilizer Maize Price
+
+```{r}
+
+date_range <- seq.Date(min(African_Fertilizer4$Dates), max(African_Fertilizer4$Dates), by = "month")
+
+African_Fertilizer4 = African_Fertilizer4 %>%
+  group_by(Country) %>%
+  complete(Dates = date_range) %>%
+  arrange(Country, Dates)
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('GhanaUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('KenyaUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('MalawiUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('NigeriaUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('TanzaniaUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice*ExchangeRate, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = LocalMaizePrice*ExchangeRate, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("LCU/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "green"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('ZambiaUreaMaizeLCU.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('GhanaUreaMaizeUSD.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('KenyaUreaMaizeUSD.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('MalawiUreaMaizeUSD.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('NigeriaUreaMaizeUSD.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('TanzaniaUreaMaizeUSD.png')
+
+ggplot(data = African_Fertilizer4  %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL)
+
+ggsave('ZambiaUreaMaizeUSD.png')
+
+
+library(gridExtra)
+
+# Plot for Ghana
+plot1 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Ghana")
+
+# Plot for Kenya
+plot2 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Kenya")
+
+# Plot for Malawi
+plot3 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8*LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Malawi")
+
+# Plot for Nigeria
+plot4 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Nigeria")
+
+# Plot for Tanzania
+plot5 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Tanzania")
+
+# Plot for Zambia
+plot6 <- ggplot(data = African_Fertilizer4 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Maize Price","Local Urea Price")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine the plots in a 3x2 grid layout
+combined_plot = grid.arrange(plot1, plot2, plot3, plot4, plot5, plot6, nrow = 3, ncol = 2)
+
+ggsave('UreaMaizeUSD.png',combined_plot, width = 15, height = 10)
+```
+
+```{r}
+library(gridExtra)
+
+# Plot for Ghana
+plot1 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Ghana")
+
+# Plot for Kenya
+plot2 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Kenya")
+
+# Plot for Malawi
+plot3 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Malawi")
+
+# Plot for Nigeria
+plot1 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Nigeria")
+
+# Plot for Tanzania
+plot5 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.92 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Tanzania")
+
+# Plot for Zambia
+plot6 <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LocalUreaPrice, color = "Local Urea Price")) +
+  geom_line(aes(x = Dates, y = 0.8 * LocalMaizePrice, color = "Local Maize Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Local Urea Price" = "red", "Local Maize Price" = "blue"), labels = c("Local Urea Price", "Local Maize Price")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine the plots in a 3x2 grid layout
+combined_plot = grid.arrange(plot1, plot2, plot3, plot1, plot5, plot6, nrow = 3, ncol = 2)
+
+ggsave('UreaMaizeUSD1.png',combined_plot, width = 15, height = 10)
+```
+
+## Plotting
+
+```{r}
+African_Fertilizer = African_Fertilizer %>% filter(Year >= 2010) 
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Kenya'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Kenya Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Kenya Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Kenya'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Kenya Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Kenya Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Kenya'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Kenya Price Wedge.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Malawi'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Malawi Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Malawi Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Malawi'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Malawi Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Malawi Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Malawi'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Malawi Price Wedge.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Nigeria'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Nigeria Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Nigeria Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Nigeria'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Nigeria Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Nigeria Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Nigeria'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Nigeria Price Wedge.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Tanzania'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Tanzania Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Tanzania Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Tanzania'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Tanzania Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Tanzania Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Tanzania'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Tanzania Price Wedge.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Zambia'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Zambia Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Zambia Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Zambia'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Zambia Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Zambia Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Zambia'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Zambia Price Wedge.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Ghana'), aes(x=Dates,y=NationalPrice)) + geom_line() + ylab('Price of Urea in USD/t') + ggtitle("Ghana Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Ghana Urea Price.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Ghana'), aes(x=Dates,y=UreaMaizeRatio)) + geom_line() + ylab('Urea Maize Price Ratio') + ggtitle("Ghana Urea Maize Price Ratio") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Ghana Urea Maize Price Ratio.png")
+
+ggplot(data = African_Fertilizer %>% filter(Country == 'Ghana'), aes(x=Dates,y=Wedge)) + geom_line() + ylab('Price Wedge') + ggtitle("Price Wedge between World and Local Urea Price") + scale_x_date(date_labels = "%Y", date_breaks = "1 year")
+
+ggsave("Ghana Price Wedge.png")
+```
+
+## Plot together
+
+```{r}
+African_Fertilizer1 = rbind(Ghana1,Kenya1,Malawi1,Nigeria1,Tanzania1,Zambia1)
+
+African_Fertilizer1 = merge(African_Fertilizer1,Urea_World, by.x = "Dates",by.y = "Dates", all.y = T) %>% mutate(Wedge = NationalPriceUSD - WorldPrice) %>% mutate(NPlcu = NationalPrice * 20) %>% mutate(wdlcu = NationalPrice * 20 - WorldPrice * Close) %>% mutate(WPlcu = WorldPrice*Close)
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Ghana Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Ghana3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Kenya Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Kenya3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Malawi Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Malawi3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Nigeria Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Nigeria3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Tanzania Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Tanzania3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Zambia Urea") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)+
+  ylim(-345, 1400)
+
+ggsave("Zambia3p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("World Urea Price") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("World Price","National Price", "Wedge" )) +
+  labs(color = NULL)+
+  ylim(0, 1000)
+
+ggsave("WorldUreaP.png")
+```
+
+```{r}
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Ghana2p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)
+
+ggsave("Kenya2p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)
+
+ggsave("Malawi2p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)
+
+ggsave("Nigeria2p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)
+
+ggsave("Tanzania2p.png")
+
+ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia2p.png")
+```
+
+# All plots together
+
+```{r}
+library(patchwork)
+
+# Create individual plots
+plot_ghana <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price",  "World Price")) +
+  labs(color = NULL)+
+  ggtitle("Ghana")
+
+plot_kenya <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Kenya")
+
+plot_malawi <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Malawi")
+
+plot_nigeria <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Nigeria")
+
+plot_tanzania <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Tanzania")
+
+plot_zambia <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = NationalPriceUSD, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine plots using patchwork
+combined_plot <- plot_ghana + plot_kenya + plot_malawi + plot_nigeria + plot_tanzania + plot_zambia + 
+  plot_layout(ncol = 2)
+
+# Save the combined plot
+ggsave("combined_plot.png", combined_plot, width = 15, height = 10)
+
+# Create individual plots
+plot_ghana_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Ghana")
+
+plot_kenya_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Kenya")
+
+plot_malawi_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Malawi")
+
+plot_nigeria_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Nigeria")
+
+plot_tanzania_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Tanzania")
+
+plot_zambia_lcu <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = NPlcu, color = "National Price")) +
+  geom_line(aes(x = Dates, y = WPlcu, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine plots using patchwork
+combined_plot_lcu <- plot_ghana_lcu + plot_kenya_lcu + plot_malawi_lcu + plot_nigeria_lcu + plot_tanzania_lcu + plot_zambia_lcu + 
+  plot_layout(ncol = 2)
+
+# Save the combined plot
+ggsave("combined_plot_lcu.png", combined_plot_lcu, width = 15, height = 10)
+
+```
+
+```{r}
+African_Fertilizer2 = African_Fertilizer %>% mutate(LcuUreaPrice = NationalPrice*ExchangeRate/CPI) %>% mutate(LcuWorldUreaPrice = WorldPrice*ExchangeRate/CPI) %>% mutate(LcuWedge = LcuUreaPrice - LcuWorldUreaPrice)
+
+
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Ghana"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Ghana Urea Price Wedge") + ylab("local price – world price in USD/ton")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Ghana Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Ghana3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Kenya Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Kenya3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Malawi Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Malawia3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Nigeria Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Nigeria3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Tanzania Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Tanzania3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ggtitle("Zambia Urea") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia3plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia"))  +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Wedge" = "blue", "National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "Wedge", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia3plcu.png")
+```
+
+```{r}
+# nominal lcu
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Ghana2plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Kenya2plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Malawi2plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Nigeria2plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Tanzania2plcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice, color = "World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "World Price" = "green"),
+                     labels = c("National Price", "World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia2plcu.png")
+```
+
+```{r}
+# Real lcu
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)
+
+ggsave("Ghana2prlcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Kenya2prlcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Malawi2prlcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Nigeria2prlcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Tanzania2prlcu.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = LcuWorldUreaPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia2prlcu.png")
+```
+
+```{r}
+# Real usd
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)
+
+ggsave("Ghana2prusd.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Kenya2prusd.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Malawi2prusd.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Nigeria2prusd.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)+
+  scale_y_continuous(labels = scales::number_format())
+
+ggsave("Tanzania2prusd.png")
+
+ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = NationalPrice/CPI, color = "Real National Price")) +
+  geom_line(aes(x = Dates, y = WorldPrice/CPI, color = "Real World Price")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("Real National Price" = "red", "Real World Price" = "green"),
+                     labels = c("Real National Price", "Real World Price")) +
+  labs(color = NULL)
+
+ggsave("Zambia2prusd.png")
+```
+
+# Plot all in one
+
+```{r}
+library(patchwork)
+
+# Create individual plots
+plot_ghana <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Ghana")
+
+plot_kenya <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Kenya")
+
+plot_malawi <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Malawi")
+
+plot_nigeria <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Nigeria")
+
+plot_tanzania <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Tanzania")
+
+plot_zambia <- ggplot(data = African_Fertilizer1 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = NationalPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = Wedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("USD/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine plots using patchwork
+combined_plot <- plot_ghana + plot_kenya + plot_malawi + plot_nigeria + plot_tanzania + plot_zambia + 
+  plot_layout(ncol = 2)
+
+# Save the combined plot
+ggsave("combined_plot.png", combined_plot, width = 15, height = 10)
+
+# Create individual plots
+plot_ghana_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Ghana")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Ghana")
+
+plot_kenya_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Kenya")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Kenya")
+
+plot_malawi_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Malawi")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Malawi")
+
+plot_nigeria_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Nigeria")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Nigeria")
+
+plot_tanzania_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Tanzania")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  scale_y_continuous(labels = scales::number_format()) +
+  ggtitle("Tanzania")
+
+plot_zambia_lcu <- ggplot(data = African_Fertilizer2 %>% filter(Country == "Zambia")) +
+  geom_line(aes(x = Dates, y = LcuUreaPrice, color = "National Price")) +
+  geom_line(aes(x = Dates, y = LcuWedge, color = "Wedge")) +
+  scale_x_date(date_labels = "%Y", date_breaks = "1 year") +
+  ylab("Lcu/ton") +
+  scale_color_manual(values = c("National Price" = "red", "Wedge" = "green"),
+                     labels = c("National Price", "Wedge")) +
+  labs(color = NULL) +
+  ggtitle("Zambia")
+
+# Combine plots using patchwork
+combined_plot_lcu <- plot_ghana_lcu + plot_kenya_lcu + plot_malawi_lcu + plot_nigeria_lcu + plot_tanzania_lcu + plot_zambia_lcu + 
+  plot_layout(ncol = 2)
+
+# Save the combined plot
+ggsave("combined_plot_lcu.png", combined_plot_lcu, width = 15, height = 10)
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Kenya"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Kenya Urea Price Wedge") + ylab("local price – world price in USD/ton")
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Malawi"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Malawi Urea Price Wedge") + ylab("local price – world price in USD/ton")
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Nigeria"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Nigeria Urea Price Wedge") + ylab("local price – world price in USD/ton")
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Tanzania"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Tanzania Urea Price Wedge") + ylab("local price – world price in USD/ton")
+```
+
+```{r}
+ggplot(data = African_Fertilizer %>% filter(Country == "Zambia"), aes(x=Dates,y=Wedge ))+geom_line() + scale_x_date(date_labels = "%Y", date_breaks = "1 year") + ggtitle("Zambia Urea Price Wedge") + ylab("local price – world price in USD/ton")
+```
+
+# Urea Price by Country Time
+
+```{r}
+Before = African_Fertilizer %>% filter(Year == 2019) %>% group_by(Country) %>% summarise(mean = mean(NationalPrice))
+During = African_Fertilizer %>% filter(Year == 2022) %>% group_by(Country) %>% summarise(mean = mean(NationalPrice))
+After = African_Fertilizer %>% filter(Year == 2023) %>% group_by(Country) %>% summarise(mean = mean(NationalPrice))
+```
+
+# Ghana NPK
+
+```{r}
+retail_prices_Ghana = read_excel("D:/Research/AfricanFertiliser/retail-prices-Ghana.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Ghana = retail_prices_Ghana %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Ghana",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Ghana_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+
+```
+
+# Urea by location
+
+```{r}
+Urea_Ghana = retail_prices_Ghana %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Ghana",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`)))
+```
+
+```{r}
+Urea_Ghana = retail_prices_Kenya %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Kenya",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`)))
+write.csv(miss, "Location missing Kenya.csv")
+```
+
+```{r}
+Urea_Ghana = retail_prices_Malawi %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Malawi",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`)))
+write.csv(miss, "Location missing Malawi.csv")
+```
+
+```{r}
+Urea_Ghana = retail_prices_Nigeria %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Nigeria",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`)))
+write.csv(miss, "Location missing Nigeria.csv")
+```
+
+```{r}
+Urea_Ghana = retail_prices_Tanzania %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Tanzania",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`)))
+write.csv(miss, "Location missing Tanzania.csv")
+```
+
+```{r}
+Urea_Ghana = retail_prices_Zambia %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Ghana$YM)
+end_date <- max(Urea_Ghana$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Ghana_avg = Urea_Ghana %>% group_by(Location) %>% arrange(YM) %>% complete(YM = all_dates)
+
+#colnames(Urea_Ghana_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Ghana_avg, aes(x = YM, y = `Open Market Retail Price`, group = Location, color = Location)) +
+  geom_line() +
+  labs(title = "Urea_Zambia",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+miss = Urea_Ghana_avg %>% summarise(mean(is.na(`Open Market Retail Price`))) 
+write.csv(miss, "Location missing Zambia.csv")
+```
+
+# Kenya Urea
+
+```{r}
+retail_prices_Kenya = read_excel("D:/Research/AfricanFertiliser/retail-prices-Kenya.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Kenya = retail_prices_Kenya %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d"))
+
+start_date <- min(Urea_Kenya$YM)
+end_date <- max(Urea_Kenya$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Kenya_avg = Urea_Kenya %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates) 
+
+colnames(Urea_Kenya_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Kenya_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Kenya",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Kenya_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+Urea_Kenya_avg = Urea_Kenya_avg %>% mutate(Year = year(Dates), Month = month(Dates))
+Urea_Kenya_avg = merge(Urea_Kenya_avg, Kenya_Interest, by.x = "Year", by.y = "Year")
+write.csv(Urea_Kenya_avg, file = "Kenya Urea National Average.csv")
+```
+
+# Malawi Urea
+
+```{r}
+retail_prices_Malawi = read_excel("D:/Research/AfricanFertiliser/retail-prices-Malawi.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Malawi = retail_prices_Malawi %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Malawi$YM)
+end_date <- max(Urea_Malawi$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Malawi_avg = Urea_Malawi %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Malawi_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Malawi_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Malawi",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Malawi_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Malawi NPK
+
+```{r}
+retail_prices_Malawi = read_excel("D:/Research/AfricanFertiliser/retail-prices-Malawi.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Malawi = retail_prices_Malawi %>% filter(`Fertilizer Product` == "NPK 8-18-15 + 6S + 0.1B + 0.1Zn") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Malawi$YM)
+end_date <- max(Urea_Malawi$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Malawi_avg = Urea_Malawi %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Malawi_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Malawi_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Malawi",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Malawi_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Nigeria Urea
+
+```{r}
+retail_prices_Nigeria = read_excel("D:/Research/AfricanFertiliser/retail-prices-Nigeria.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Nigeria = retail_prices_Nigeria %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Nigeria$YM)
+end_date <- max(Urea_Nigeria$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Nigeria_avg = Urea_Nigeria %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Nigeria_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Nigeria_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Nigeria",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Nigeria_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Nigeria NPK
+
+```{r}
+retail_prices_Nigeria = read_excel("D:/Research/AfricanFertiliser/retail-prices-Nigeria.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Nigeria = retail_prices_Nigeria %>% filter(`Fertilizer Product` == "NPK 15-15-15") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Nigeria$YM)
+end_date <- max(Urea_Nigeria$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Nigeria_avg = Urea_Nigeria %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Nigeria_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Nigeria_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Nigeria",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Nigeria_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Tanzania Urea
+
+```{r}
+retail_prices_Tanzania = read_excel("D:/Research/AfricanFertiliser/retail-prices-Tanzania.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Tanzania = retail_prices_Tanzania %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Tanzania$YM)
+end_date <- max(Urea_Tanzania$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Tanzania_avg = Urea_Tanzania %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Tanzania_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Tanzania_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Tanzania",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Tanzania_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Tanzania NPK
+
+```{r}
+retail_prices_Tanzania = read_excel("D:/Research/AfricanFertiliser/retail-prices-Tanzania.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Tanzania = retail_prices_Tanzania %>% filter(`Fertilizer Product` == "NPK 20-10-10") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Tanzania$YM)
+end_date <- max(Urea_Tanzania$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Tanzania_avg = Urea_Tanzania %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Tanzania_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Tanzania_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Tanzania",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Tanzania_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Uganda Urea
+
+```{r}
+retail_prices_Uganda = read_excel("D:/Research/AfricanFertiliser/retail-prices-Uganda.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Uganda = retail_prices_Uganda %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Uganda$YM)
+end_date <- max(Urea_Uganda$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Uganda_avg = Urea_Uganda %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Uganda_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Uganda_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Uganda",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Uganda_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Uganda NPK
+
+```{r}
+retail_prices_Uganda = read_excel("D:/Research/AfricanFertiliser/retail-prices-Uganda.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Uganda = retail_prices_Uganda %>% filter(`Fertilizer Product` == "NPK 17-17-17") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Uganda$YM)
+end_date <- max(Urea_Uganda$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Uganda_avg = Urea_Uganda %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Uganda_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Uganda_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Uganda",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Uganda_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Zambia Urea
+
+```{r}
+retail_prices_Zambia = read_excel("D:/Research/AfricanFertiliser/retail-prices-Zambia.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Zambia = retail_prices_Zambia %>% filter(`Fertilizer Product` == "Urea") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Zambia$YM)
+end_date <- max(Urea_Zambia$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Zambia_avg = Urea_Zambia %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Zambia_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Zambia_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "Urea_Zambia",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Zambia_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```
+
+# Zambia NPK
+
+```{r}
+retail_prices_Zambia = read_excel("D:/Research/AfricanFertiliser/retail-prices-Zambia.xlsx") %>% mutate(Month = replace_month(Month))
+
+Urea_Zambia = retail_prices_Zambia %>% filter(`Fertilizer Product` == "NPK 10-20-10 + 6.5S") %>% mutate(YM = paste0(Year,"/", Month,"/01") %>% as.Date(date_string, format = "%Y/%m/%d")) 
+
+start_date <- min(Urea_Zambia$YM)
+end_date <- max(Urea_Zambia$YM)
+all_dates <- seq(start_date, end_date, by = "months")
+
+Urea_Zambia_avg = Urea_Zambia %>% group_by(YM) %>% summarize(mean(`Open Market Retail Price`, na.rm = TRUE)) %>% arrange(YM) %>% complete(YM = all_dates)
+
+colnames(Urea_Zambia_avg) = c("Dates", "NationalPrice")
+
+ggplot(Urea_Zambia_avg, aes(x = Dates, y = NationalPrice)) +
+  geom_line() +
+  labs(title = "NPK_Zambia",
+       x = "Date",
+       y = "Value") +
+  theme_minimal()
+
+NAs = mean(is.na(Urea_Zambia_avg$NationalPrice))
+cat("Precentage missing is:", NAs)
+```

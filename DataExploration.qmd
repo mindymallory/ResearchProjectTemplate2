@@ -1,0 +1,91 @@
+---
+title: "DataExploration"
+format: html
+editor: visual
+---
+
+Raw Plots of All Variables Used are found in "RawData/RawPlots"
+
+Plotted before and after filling to confirm any weird issues from filling
+
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(zoo)
+library(forecast)
+library(tseries)
+library(stargazer)
+library(plm)
+library(broom)
+DATA <- read.csv("CleanData/DATA.csv")
+
+# Load all custom functions
+r_files <- list.files(path = 'Functions', pattern = "\\.R$", full.names = TRUE)
+walk(r_files, source)
+```
+
+```{r}
+# Add Date column
+DATA <- DATA %>%
+  mutate(Date = ymd(paste(Year, Month, "01", sep = "-")))
+
+DATA <- DATA %>% filter(Country != "NA") # Some 2023 dates from world variables were causing na country rows. We could more carefully filter to 2022 or simply drop na here. Since we want all data in the price plots, it is easier to drop na country here. 
+
+# List of columns to plot (excluding non-numeric and key columns)
+columns_to_plot <- colnames(DATA)[!(colnames(DATA) %in% c("X", "key", "key1", "Year", "Month", "Country", "Date"))]
+
+# Loop through each column and create a plot
+for (column_name in columns_to_plot) {
+  p <- ggplot(DATA, aes_string(x = "Date", y = column_name, color = 'Country')) + 
+    geom_point() + 
+    labs(title = paste(column_name ),
+         x = "Date",
+         y = column_name) + 
+    facet_wrap("Country")
+  
+  # Save the plot
+  ggsave(filename = paste0("RawData/RawPlots/", column_name, ".png"), plot = p)
+}
+```
+
+
+
+Plotting Filled Data
+
+```{r}
+DATA_Fill <- DATA %>% 
+  select(-c(key1, X, Year, Month)) %>%
+  separate(key, into = c("Year", "Month", "Country"), sep = "-", remove = FALSE) %>% 
+  group_by(Country) %>%
+  arrange(Year, Month) %>%
+  group_modify(~ interpolate_and_fill(.x)) %>%
+  ungroup() %>%
+  mutate(Date = ymd(paste(Year, Month, "01", sep = "-")))
+
+# List of columns to plot (excluding non-numeric and key columns)
+columns_to_plot <- colnames(DATA_Fill)[!(colnames(DATA_Fill) %in% c("X", "key", "key1", "Year", "Month", "Country", "Date"))]
+
+# Loop through each column and create a plot
+for (column_name in columns_to_plot) {
+  p <- ggplot(DATA_Fill, aes_string(x = "Date", y = column_name, color = 'Country')) + 
+    geom_point() + 
+    labs(title = paste0(column_name, 'filled'),
+         x = "Date",
+         y = paste0(column_name, 'filled')) + 
+    facet_wrap("Country")
+  
+  # Save the plot
+  ggsave(filename = paste0("RawData/RawPlots/", column_name, " filled", ".png"), plot = p)
+}
+```
+
+```{r}
+DATA_Fill %>% 
+  mutate(ym = paste0(Year, Month)) %>%
+  select(c(Country, ym, WorldUrea)) %>% 
+  pivot_wider(names_from = Country, values_from = WorldUrea)
+```
+A note about the plots. If you look at WorldUrea and WorldUreaFilled ,you will see at the end of hte sample they look quite different. This is becasue there is some country Tanzania that we have fertilizer data for through 2023/2024, that creates a lot of na's for other countries during those time periods, and in the join, the world variables fill as na's for those countries. In short, it is caused by differing lengths of some variable across countries and then joins with the 'world' variables. If this is an issue, just filter the dataframe to the timeframe of the study and it will look fine.  

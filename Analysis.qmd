@@ -4,6 +4,440 @@ format: html
 editor: visual
 ---
 
-hello
+```{r}
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(zoo)
+library(forecast)
+library(tseries)
+library(stargazer)
+library(plm)
+library(broom)
+library(purrr)
+library(waldo)
+options(scipen = 999)
+DATA <- read.csv("CleanData/DATA.csv") %>% 
+  select(-c( X, Year, Month)) %>%
+  separate(key, into = c("Year", "Month", "Country"), sep = "-", remove = FALSE) %>% 
+  group_by(Country) %>%
+  arrange(Country, as.numeric(Year), as.numeric(Month)) %>% 
+  mutate(Urea = na.approx(Urea, na.rm = FALSE),
+         NPK = na.approx(NPK, na.rm = FALSE),
+         Diammonium.Phosphate = na.approx(Diammonium.Phosphate, na.rm = FALSE)) %>%
+  filter(Year >= 2010 & Year <= 2023) %>%
+  drop_na(Urea)
+  
+DATA_Rundong <- read.csv("C:/Users/mindy/Downloads/Re_ Final Results/FullPanelData.csv") %>% mutate(key = paste0(Year, "-", month(Dates), "-", Country))
 
-mgmb
+#waldo::compare(DATA, DATA_Rundong)
+
+#%>% 
+#  filter(!is.na(Urea))
+
+# Load all custom functions
+r_files <- list.files(path = 'Functions', pattern = "\\.R$", full.names = TRUE)
+walk(r_files, source)
+```
+
+Quick Summary stats for spot checking. This is not the formatted version for the paper
+
+```{r}
+DATA %>% 
+  separate(key, into = c("Year", "Month", "Country"), sep = "-", convert = TRUE, remove = FALSE) %>%
+  group_by(Country) %>%  
+  select(-c( key, Year, Month, Country)) %>%
+  summarise(
+    across(everything(), list(
+      mean = ~ mean(., na.rm = TRUE),
+      median = ~ median(., na.rm = TRUE),
+      sd = ~ sd(., na.rm = TRUE),
+      min = ~ min(., na.rm = TRUE),
+      max = ~ max(., na.rm = TRUE),
+      n = ~ sum(!is.na(.))
+    ))
+  ) %>%
+  pivot_longer(cols = everything(), names_to = c("variable", ".value"), names_sep = "_") 
+```
+
+Fill RHS
+
+```{r}
+DATA_Fill <- DATA %>%
+  group_modify(~ interpolate_and_fill(.x)) %>%
+  ungroup() %>%
+  mutate(Date = ymd(paste(Year, Month, "01", sep = "-"))) 
+  
+
+
+DATA_No_Fill <- DATA %>%
+  ungroup() %>%
+  mutate(Date = ymd(paste(Year, Month, "01", sep = "-"))) 
+
+```
+
+Plots of Fertilizer Prices by Country. Not formatted for Publication
+
+```{r}
+
+
+# # Split the data by Country
+# country_list <- split(DATA_Fill, DATA_Fill$Country)
+# 
+# # Use purrr::imap to iterate over the list and apply the function with the selected fertilizer type
+# fertilizer_types <- c("NPK", "Urea", "Diammonium.Phosphate")
+# 
+# for (fertilizer in fertilizer_types) {
+#   imap(country_list, ~ create_and_save_plot(.x, .y, fertilizer))
+# }
+```
+
+Modelling with Filled Data
+
+```{r}
+DATA_Fill %>% colnames()
+
+DATA_Fill <- DATA_Fill %>%
+  group_by(Country) %>%
+  #arrange(Date) %>% 
+  mutate(
+    diff_cpi = log(CPI),
+    diff_cpi = c(NA, diff(diff_cpi)),
+    # diff_cpi = c(NA,diff(CPI)),
+    # diff_cpi = asinh(diff_cpi),
+    diff_exchange_rate = c(NA, diff(log(ExchangeRate)))
+    # diff_exchange_rate = c(NA, diff(ExchangeRate)),
+    # diff_exchagne_rate = asinh(diff_exchange_rate)
+  ) %>%
+  ungroup() %>%
+  drop_na(diff_cpi, diff_exchange_rate)
+```
+
+```{r}
+DATA_Fill %>% 
+  filter(Year < 2024) %>% 
+  group_by(Country) %>% 
+  mutate(CPI_0 = CPI/first(CPI)) %>% 
+  ggplot(aes(x = as.Date(Date), y = SharePrivateSectorSalesAnnual, color = Country)) + 
+  geom_line() + 
+  facet_wrap('Country') #+ lims(y = c(-.04, .12))
+
+DATA_Rundong %>% 
+  filter(Year < 2024) %>% 
+  group_by(Country) %>% 
+  mutate(CPI_0 = CPI/first(CPI)) %>% 
+  ggplot(aes(x = as.Date(Dates), y = CorruptionControl, color = Country)) + 
+  geom_line() + 
+  facet_wrap('Country') #+  lims(y = c(-.04, .12))
+
+```
+
+```{r}
+# Jake asked for all specification with all variables in LCU and put specification with all USD in appendix. 
+
+m1 <- plm(
+  data = DATA_Fill %>% filter(Year < 2024), 
+  log(Urea )  ~  
+    log(Natural.gas.index*ExchangeRate) + 
+    log(WorldUrea*ExchangeRate) + 
+    log(Diesel) + 
+    lag(log(MaizePrice)) + 
+    log(SharePrivateSectorSalesAnnual) + 
+    log(MonthlyUreaImportMT) + 
+    log(NumFirmsImportingFert) + 
+    diff_exchange_rate + 
+    diff_cpi + 
+    log(GDP) + 
+    log(RealInterest) + 
+    log(ForexReserves) + 
+    ElectionYr + 
+    ElectionYr1 + 
+    ControlofCorruption +
+    factor(Year),
+    index = c("Country"),
+    model = "within") 
+
+summary(m1)
+
+```
+
+```{r}
+tidy_Pall <- tidy(m1, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[1:15,])
+
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+p <- ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World Urea Price", "World Natural Gas Price")))
+p
+ggsave('FinalMindy/CrossCountryLCU_P.png', p)
+```
+
+Wedge
+
+```{r}
+# Jake asked for all specification with all variables in LCU and put specification with all USD in appendix. 
+
+#Need to do transfomration like asinh because wedge is sometimes negative
+DATA_Fill %>% 
+  group_by(Country) %>% 
+  mutate(wedge = (Urea/ExchangeRate - (WorldUrea)) ) %>% 
+  #filter(wedge <=0 )
+ ggplot(aes(x = Date, y = wedge)) + geom_line() + facet_wrap('Country')
+
+m2 <- plm(
+  data = DATA_Fill %>% filter(Year < 2024), 
+  asinh(Urea - WorldUrea*ExchangeRate )  ~  
+  #log(Urea - (WorldUrea*ExchangeRate)) ~
+    log(Natural.gas.index*ExchangeRate) + 
+    #log(WorldUrea*ExchangeRate) + 
+    log(Diesel) + 
+    lag(log(MaizePrice)) + 
+    log(SharePrivateSectorSalesAnnual) + 
+    log(MonthlyUreaImportMT) + 
+    log(NumFirmsImportingFert) + 
+    diff_exchange_rate + 
+    diff_cpi + 
+    log(GDP) + 
+    log(RealInterest) + 
+    log(ForexReserves) + 
+    ElectionYr + 
+    ElectionYr1 + 
+    ControlofCorruption +
+    factor(Year),
+    index = c("Country"),
+    model = "within") 
+
+summary(m2)
+
+```
+
+```{r}
+tidy_Pall <- tidy(m2, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[1:14,])
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+w <- ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip()+
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price",  "World Natural Gas Price")))
+w
+ggsave('FinalMindy/CrossCountryLCU_W.png', w)
+```
+
+# Country Specific Models
+
+```{r}
+country = "Zambia"
+m1 <- lm(
+  data = DATA_Fill %>% filter(Year < 2024) %>% filter(Country == country), 
+  log(Urea )  ~  
+    log(Natural.gas.index*ExchangeRate) + 
+    log(WorldUrea*ExchangeRate) + 
+    log(Diesel) + 
+    lag(log(MaizePrice)) + 
+    log(SharePrivateSectorSalesAnnual) + 
+    log(MonthlyUreaImportMT) + 
+    log(NumFirmsImportingFert) + 
+    diff_exchange_rate + 
+    diff_cpi + 
+    log(GDP) + 
+    log(RealInterest) + 
+    log(ForexReserves) + 
+    ElectionYr + 
+    ElectionYr1 + 
+    ControlofCorruption +
+    factor(Year)) 
+
+summary(m1)
+```
+
+```{r}
+tidy_Pall <- tidy(m1, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[2:16,])
+
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+p <- ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip() +
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price", "World Urea Price", "World Natural Gas Price")))
+p
+ggsave(paste0('FinalMindy/CrossCountryLCU_P', country, '.png'), p)
+```
+
+Wedge Country
+
+```{r}
+# Jake asked for all specification with all variables in LCU and put specification with all USD in appendix. 
+
+#Need to do transfomration like asinh because wedge is sometimes negative
+DATA_Fill %>% 
+  group_by(Country) %>% 
+  mutate(wedge = (Urea/ExchangeRate - (WorldUrea)) ) %>% 
+  #filter(wedge <=0 )
+ ggplot(aes(x = Date, y = wedge)) + geom_line() + facet_wrap('Country')
+
+m2 <- lm(
+  data = DATA_Fill %>% filter(Year < 2024) %>% filter(Country == country), 
+  asinh(NPK - WorldUrea*ExchangeRate )  ~  
+  #log(Urea - (WorldUrea*ExchangeRate)) ~
+    log(Natural.gas.index*ExchangeRate) + 
+    #log(WorldUrea*ExchangeRate) + 
+    log(Diesel) + 
+    lag(log(MaizePrice)) + 
+    log(SharePrivateSectorSalesAnnual) + 
+    log(MonthlyUreaImportMT) + 
+    log(NumFirmsImportingFert) + 
+    diff_exchange_rate + 
+    diff_cpi + 
+    log(GDP) + 
+    log(RealInterest) + 
+    log(ForexReserves) + 
+    ElectionYr + 
+    ElectionYr1 + 
+    ControlofCorruption +
+    factor(Year)) 
+
+summary(m2)
+
+```
+
+```{r}
+tidy_Pall <- tidy(m2, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[2:15,])
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+w <- ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip()+
+    scale_x_discrete(labels = rev(c("Corruption control Index", "One Yr After Election", "Election Yr", "Log ForEx Reserves", "Log Real Interest", "Log GDP", "CPI Movements", "Exchange Rates Movements", "Num of Firms Importing Fert", "Monthly Urea Imports", "Annual Share of Private Sector Sales", "Local Maize Price", "Local Diesel Price",  "World Natural Gas Price")))
+w
+ggsave(paste0('FinalMindy/CrossCountryLCU_W', country, '.png'), w)
+```
+
+Without Filling Missing Values
+
+```{r}
+DATA_No_Fill %>% colnames()
+
+DATA_No_Fill <- DATA_No_Fill %>%
+  group_by(Country) %>%
+  mutate(
+    diff_cpi = c(NA, diff(CPI)),
+    diff_exchange_rate = c(NA, diff(ExchangeRate))
+  ) %>%
+  ungroup() %>%
+  drop_na(diff_cpi, diff_exchange_rate)
+```
+
+```{r}
+
+m1 <- plm(
+  data = DATA_No_Fill, 
+  log(Urea*20) ~  
+    log(Natural.gas.index) + 
+    log(WorldUrea) + 
+    log(Diesel) + 
+    lag(log(MaizePrice)) + 
+    SharePrivateSectorSalesAnnual + 
+    log(MonthlyUreaImportMT) + 
+    log(NumFirmsImportingFert) + 
+    diff_exchange_rate + 
+    diff_cpi + 
+    log(GDP) + 
+    log(RealInterest) + 
+    log(ForexReserves) + 
+    ElectionYr + 
+    ElectionYr1 + 
+    ControlofCorruption +
+    factor(Year),
+    index = c("Country"), 
+  model = "within") 
+
+summary(m1)
+```
+
+```{r}
+tidy_Pall <- tidy(m1, conf.int = TRUE) %>% mutate(Model = "NationalPrice")
+
+results <- rbind(tidy_Pall[1:15,])
+
+results$term <- factor(results$term, levels = unique(results$term))
+
+results$Significance <- ifelse(results$p.value < 0.05, "Significant", "Not Significant")
+
+ggplot(results, aes(x = term, y = estimate, shape = Significance, color = Significance)) +
+    geom_point(size = 3) +
+    geom_errorbar(aes(ymin = conf.low, ymax = conf.high), width = 0.2) +
+    geom_text(aes(label = sprintf("%.2f", estimate)), 
+              vjust = -0.5, hjust = -0.2) +
+    labs(y = "Response",
+         x = "Variables") +
+    scale_shape_manual(values = c(16, 17)) +  # Different shapes for significant and not significant
+    scale_color_manual(values = c("black", "red")) +  # Different colors for significant and not significant
+    geom_vline(xintercept = 0, linetype = "dashed") + 
+  geom_hline(yintercept = 0, linetype = "dashed") +
+    coord_flip()
+
+```
+
+```{r}
+DATA_No_Fill %>% filter(Country == "Kenya")
+```

@@ -4,23 +4,671 @@ format: html
 editor: visual
 ---
 
-## Quarto
-
-Quarto enables you to weave together content and executable code into a finished document. To learn more about Quarto see <https://quarto.org>.
-
-## Running Code
-
-When you click the **Render** button a document will be generated that includes both content and the output of embedded code. You can embed code like this:
+This script uses data in 'RawData' file to load, clean, and combine the different raw data sources. It creates a file called "CleanData/DATA.csv" to be used in the 'Analysis.qmd script' 
 
 ```{r}
-1 + 1
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(readxl)
+library(tidyr)
+library(zoo)
+library(forecast)
+library(tseries)
+library(stargazer)
+library(purrr)
+
+# Load all custom functions
+r_files <- list.files(path = 'Functions', pattern = "\\.R$", full.names = TRUE)
+walk(r_files, source)
+
+# Vectors needed for below
+countries <- c("Ghana", "Kenya", "Malawi", "Nigeria", "Zambia", "Tanzania")
+monthly_dates <- seq(as.Date("2010-01-01"), as.Date("2024-02-01"), by = "month")
+
+# Create a full sequence of dates for each country and fertilizer group
+full_dates <- seq.Date(from = as.Date("2010-01-01"), to = as.Date("2024-12-01"), by = "month")
+
+# Needed to fix Zambia 'monthly' imports for summing to annual and then making monthly because afriqom didn't put the month labels on
+date_seq <- seq(from = as.Date("2010-01-01"), to = as.Date("2024-12-01"), by = "month")
+monthly_df <- data.frame(
+  Date = date_seq,
+  Year = year(date_seq),
+  Month = month(date_seq)
+)
+
+# Election Data
+# from https://www.eisa.org/election-calendar/ 
+
+df_elec_1 <- data.frame(
+  Year = c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023),
+  Ghana = c(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1),
+  Nigeria = c(0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1),
+  Kenya = c(0, 1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0),
+  Malawi = c(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0),
+  Tanzania = c(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0),
+  Zambia = c(0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0)
+) %>% pivot_longer(cols = -Year, names_to = "Country", values_to = 'ElectionYr1')
+
+df_elec_0 <- data.frame(
+  Year = c(2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023),
+  Ghana = c(0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0),
+  Nigeria = c(0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0),
+  Kenya = c(1, 0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0),
+  Malawi = c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0),
+  Tanzania = c(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0),
+  Zambia = c(0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0)
+) %>% pivot_longer(cols = -Year, names_to = "Country", values_to = 'ElectionYr')
+
 ```
 
-You can add options to executable code like this
+Load all data
+```{r}
+################################################
+# Real Interest Rate, Ghana added with Rbind from Ghana_IR.xlsx 
+AnnualRHS <- read_excel("RawData/Annually Real Interest Rate.xls", 
+    sheet = "Data", skip = 2) %>% 
+  mutate(Country = `Country Name`) %>% 
+  select(-c(`Country Name`, `Country Code`, `Indicator Name`,`Indicator Code`)) %>%
+  filter(Country %in% countries) %>% 
+  pivot_longer(cols = -Country, 
+               names_to = 'Year', 
+               values_to = 'RealInterest') %>% 
+  mutate(key1 = paste0(Country, "-", Year)) %>%
+  filter(Country != "Ghana") %>%
+  select(c(key1,RealInterest, Year)) %>%
+  rbind(
+    read_excel("RawData/Ghana_IR.xlsx") %>% 
+  mutate(RealInterest = Interest,
+         Country = "Ghana", 
+         key1 = paste0(Country,"-",Year)) %>% 
+  select(c(key1,RealInterest, Year))
+  ) %>%
+  filter(as.numeric(Year) >= 2010 & as.numeric(Year) <= 2024) %>%
+  select(key1, RealInterest) %>%
+
+################################################
+# Join with ForexReserves
+full_join(
+  read_excel("C:/Users/mindy/OneDrive/Documents/Github/AfricanFertilzier/RawData/ForeExRev.xlsx")  %>% 
+  mutate(key1 = paste0(Country, "-", Year),
+         ForexReserves = ForexRev) %>%
+  filter(as.numeric(Year) >= 2010 & as.numeric(Year) <= 2024) %>%
+  select(key1, ForexReserves)   , by = 'key1') %>%
+
+################################################
+# Join with Election Variables
+full_join(
+  df_elec_0 %>% 
+    mutate(key1 = paste0(Country,"-", Year)) %>% 
+    filter(Year >= 2010 & Year <= 2024) %>%
+  select(c(key1, ElectionYr)) , by = 'key1')  %>%
+  full_join(
+  df_elec_1 %>% 
+    mutate(key1 = paste0(Country,"-", Year)) %>% 
+    filter(Year >= 2010 & Year <= 2024) %>%
+  select(c(key1, ElectionYr1)), by = 'key1')  %>%
+
+################################################
+# Join with GDP Variables
+full_join(
+read_excel("RawData/Zambia GDP.xls") %>% 
+  rbind(read_excel("RawData/Malawi GDP.xls")) %>% 
+  rbind(read_excel("RawData/Tanzania GDP.xls") %>% mutate(Area = "Tanzania")) %>% 
+  rbind(read_excel("RawData/Kenya GDP.xls")) %>% 
+  rbind(read_excel("RawData/Nigeria GDP.xls")) %>% 
+  rbind(read_excel("RawData/Ghana GDP.xls")) %>% 
+  select(c(Area, Year, Value)) %>% 
+  rename(Country = Area, GDP = Value) %>%
+  mutate(key1 = paste0(Country, "-", Year)) %>%
+  filter(Year >= 2010 & Year <= 2024), by = 'key1'
+) %>% 
+  
+################################################
+# Join with Corruption Control Variables
+full_join(
+  read_excel('RawData/P_Data_Extract_From_Worldwide_Governance_Indicators-Corruption.xlsx') %>% 
+  filter(`Series Name` == 'Control of Corruption: Estimate',
+         `Country Name` != "Uganda") %>% 
+  rename(Country = `Country Name`) %>% 
+  select(-c(`Country Code`, `Series Name`)) %>% 
+  pivot_longer(cols = -Country, names_to = "Year", values_to = 'ControlofCorruption') %>% 
+  mutate(key1 = paste0(Country, "-", Year)) %>% 
+  select(c(key1, ControlofCorruption)), by = 'key1'
+) %>%
+  
+################################################
+# Join with Private Share of Supply Variables
+full_join(
+  read_excel("RawData/Ghana_PS.xlsx") %>% 
+    mutate(Country = "Ghana",
+           key1 = paste0(Country, "-", Year)) %>% filter(Year >= 2010 & Year <= 2024) %>% 
+    select(c(key1, SharePrivateSectorSalesAnnual)) %>%
+rbind(
+  read_excel("RawData/KenyaPrivateSupply.xlsx") %>% 
+    mutate(Country = "Kenya",
+           key1 = paste0(Country, "-", Year)) %>%
+    select(c(key1, SharePrivateSectorSalesAnnual)) 
+    ) %>%
+rbind(
+  read_excel("RawData/Tanzania_PS.xlsx") %>% 
+    mutate(Country = "Tanzania",
+           key1 = paste0(Country, "-", Year)) %>%
+    select(c(key1, SharePrivateSectorSalesAnnual)) 
+    ) %>%
+rbind(
+  read_excel("RawData/Nigeria_PS.xlsx") %>% 
+    mutate(Country = "Nigeria",
+           key1 = paste0(Country, "-", Year)) %>%
+    select(c(key1, SharePrivateSectorSalesAnnual)) 
+    ) %>%
+rbind(
+  read_excel("RawData/Malawi_PS1.xlsx") %>% 
+    mutate(Country = "Malawi",
+           key1 = paste0(Country, "-", Year)) %>%
+     
+    select(c(key1, SharePrivateSectorSalesAnnual)) 
+    ) %>%
+rbind(
+  read_excel("RawData/Zambia_PS.xlsx") %>% 
+    mutate(Country = "Zambia",
+           key1 = paste0(Country, "-", Year)) %>%
+     
+    select(c(key1, SharePrivateSectorSalesAnnual)) 
+    )
+)  %>%
+  
+################################################
+# Join with Number of Firms IMporting Variables
+full_join(
+    read_excel("RawData/GhanaProd.xlsx") %>% 
+    mutate(Country = "Ghana") %>% 
+  rbind(read_excel("RawData/MalawiProd.xlsx") %>% 
+    mutate(Country = "Malawi")) %>% 
+  rbind(read_excel("RawData/TanzaniaProd.xlsx") %>% mutate(Country = "Tanzania") %>% 
+    mutate(Country = "Tanzania"))%>% 
+  rbind(read_excel("RawData/KenyaProd.xlsx") %>% 
+    mutate(Country = "Kenya"))%>% 
+  rbind(read_excel("RawData/NigeriaProd.xlsx") %>% 
+    mutate(Country = "Nigeria"))%>% 
+  rbind(read_excel("RawData/ZambiaProd.xlsx") %>% 
+    mutate(Country = "Zambia")) %>%
+  mutate(key1 = paste0(Country, "-", Year)) %>%
+    select(c(key1, NumFirmsImportingFert)) %>%
+  separate(key1, into = c("Country", "Year"), sep = "-", convert = TRUE) %>%
+  filter(Year >= 2010 & Year <= 2024) %>%
+    mutate(Year = as.character(Year)) %>% 
+    mutate(key1 = paste0(Country, "-", Year)) %>%
+    select(c(key1, NumFirmsImportingFert)), by = "key1"
+) 
+
+AnnualRHS
+```
+
 
 ```{r}
-#| echo: false
-2 * 2
+################################################
+# Join with Pink Sheet data for world Urea, and Natural Gas
+# Many to many join expected here as we go from yearly data to monthly data and annual gets pasted to every month
+data <- full_join(AnnualRHS, 
+read_excel("RawData/PinkSheet.xlsx") %>% 
+   mutate(Year = substr(`...1`, 1,4),
+         Month = as.character(as.numeric(substr(`...1`, 6,7)))) %>% # these class conversions are to get a month single diget 1 instead of 01
+   select(c(Year, Month, Urea, `Natural gas index`)), by = 'Year') %>%
+  mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(-c(Year, Month)) %>%
+
+################################################
+# Join with Country Local Diesel Prices and Gasoline Prices for Nigeria
+full_join(
+read_excel("RawData/DieselPriceByCountry.xlsx")%>% 
+  mutate(Month = case_when(
+      Month == 'January' ~ '1',
+      Month == 'February' ~ '2',
+      Month == 'March' ~ '3',
+      Month == 'April' ~ '4',
+      Month == 'May' ~ '5',
+      Month == 'June' ~ '6',
+      Month == 'July' ~ '7',
+      Month == 'August' ~ '8',
+      Month == 'September' ~ '9',
+      Month == 'October' ~ '10',
+      Month == 'November' ~ '11',
+      Month == 'December' ~ '12',
+      TRUE ~ as.character(Month) # In case the Month is already numeric
+    )) %>% 
+      mutate(key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, Diesel)) %>%
+
+# Rbind to add Nigerian Gasoline  
+  rbind(
+    read_excel("RawData/GasolineNigeria.xlsx") %>% 
+      mutate(Year = year(as.Date(DateTime)),
+             Month = month(as.Date(DateTime)),
+             Diesel = Close) %>% 
+      mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+      select(c(key, Diesel))  
+  ) , by = 'key') %>%
+  
+
+################################################
+# Join with Exchange Rates
+full_join(
+read.csv("RawData/ZMW=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Zambia',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key,ExchangeRate )) %>% 
+  rbind(
+  read.csv("RawData/TZS=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Tanzania',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key,ExchangeRate ))
+  ) %>%
+  rbind(
+  read.csv("RawData/NGN=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Nigeria',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key,ExchangeRate ))
+  ) %>%
+  rbind(
+  read.csv("RawData/MWK=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Malawi',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key,ExchangeRate ))
+  ) %>%
+  rbind(
+  read.csv("RawData/KES=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Kenya',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key,ExchangeRate ))
+  ) %>%
+  rbind(
+  read.csv("RawData/GHS=X.csv") %>% 
+  mutate(ExchangeRate = Close,
+         Country = 'Ghana',
+         Year = year(as.Date(Date, format = "%Y/%m/%d")),
+         Month = month(as.Date(Date, format = "%Y/%m/%d")),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key,ExchangeRate ))
+  ) %>% 
+  mutate(ExchangeRate = case_when(key == "2020-3-Ghana" ~ 5.73, TRUE ~ ExchangeRate)), by = 'key') %>%
+
+################################################
+# Join with CPI
+full_join(
+read_excel("RawData/cpi_index.xlsx") %>% 
+  mutate(Dates = as.Date(format(monthly_dates, "%Y-%m-01"))) %>% 
+  mutate(Year = year(as.Date(Dates, format = "%m/%d/%Y")),
+         Month = month(as.Date(Dates, format = "%m/%d/%Y")))%>% 
+  pivot_longer(cols = -c(Dates, Year, Month),
+               names_to = 'Country',
+               values_to = 'CPI') %>%
+  mutate(key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, CPI)) %>% 
+  mutate(CPI = case_when(key == "2012-10-Malawi" ~ NA, TRUE ~ CPI)), by = 'key') %>%
+
+  
+################################################
+# Join with Maize Prices, From FAO LCU/tonne
+# scaled by .8 or .92 to convert to producer price according to Jake's request
+full_join(
+read.csv("RawData/Zambia_mz.csv") %>%
+  mutate(MaizePrice = Zambia..RETAIL..National.Average..Maize..white...ZMK.20.kg*50*.8, # Zambia was LCU per 20kg in raw data
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Zambia",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice)) %>%
+  rbind(
+  read.csv("RawData/Tanzania_mz.csv") %>%
+  mutate(MaizePrice = United.Republic.of.Tanzania..WHOLESALE..National.Average..Maize..TZS.100.kg*10*.92, 
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Tanzania",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice))  
+  ) %>%
+  rbind(
+  read.csv("RawData/Nigeria_mz.csv") %>%
+  mutate(MaizePrice = Nigeria..WHOLESALE..Kano..Maize..white...NGN.100.kg*10*.92, 
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Nigeria",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice))  
+  ) %>%
+  rbind(
+  read.csv("RawData/Malawi_mz.csv") %>%
+  mutate(MaizePrice = Malawi..RETAIL..National.Average..Maize..MWK.Kg*1000*.8, 
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Malawi",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice))  
+  ) %>%
+  rbind(
+  read.csv("RawData/Kenya_mz.csv") %>%
+  mutate(MaizePrice = Kenya..WHOLESALE..Nakuru.Wakulima..Maize..white...KES.Kg*1000*.92, 
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Kenya",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice))  
+  )  %>%
+  rbind(
+  read.csv("RawData/Ghana_mz.csv") %>%
+  mutate(MaizePrice = Ghana..WHOLESALE..Accra..Maize..GHS.100.kg*10*.92, 
+         Year = year(as.Date(Date, format = "%m/%d/%Y")),
+         Month = month(as.Date(Date, format = "%m/%d/%Y")),
+         Country = "Ghana",
+         key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MaizePrice))) , by = 'key') %>% 
+
+################################################
+# Join with Monthly Imports from Afriqom
+full_join(
+  read_excel("RawData/Ghana_IM.xlsx") %>% 
+  group_by(Date) %>% 
+  summarise(MonthlyUreaImportMT = sum(Q)) %>% 
+  mutate(Dates = as.Date(Date))%>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% 
+  mutate(Country = "Ghana",
+         Year = year(Dates),
+         Month = month(Dates),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+    select(c(key, MonthlyUreaImportMT)) %>%
+rbind(
+  read_excel("RawData/KenyaIMm.xlsx")  %>% 
+    mutate(Month = month(Date),
+           Year = year(Date),
+           Date = paste0(Year, "-", Month, "-", "01")) %>%
+  group_by(Date) %>% 
+  summarise(MonthlyUreaImportMT = sum(`Quantity (t)`)) %>%
+  mutate(Dates = as.Date(Date))%>%
+  mutate(Country = "Kenya",
+         Year = year(Dates),
+         Month = month(Dates),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, MonthlyUreaImportMT))    
+    )%>%
+rbind(
+  read_excel("RawData/TanzaniaIM.xlsx") %>% 
+    mutate(Month = month(Date),
+           Year = year(Date),
+           Date = paste0(Year, "-", Month, "-", "01")) %>% 
+  group_by(Date) %>% 
+  summarise(MonthlyUreaImportMT = sum(Quantity)) %>%
+  mutate(Dates = as.Date(Date))%>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% select(-"Date") %>% 
+  mutate(Country = "Tanzania",
+         Year = year(Dates),
+         Month = month(Dates),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, MonthlyUreaImportMT))    
+    )%>%
+rbind(
+  read_excel("RawData/Malawi_IM.xlsx") %>% 
+  mutate(Month = month(Date),
+           Year = year(Date),
+           Date = paste0(Year, "-", Month, "-", "01")) %>% 
+  group_by(Date) %>% 
+  summarise(MonthlyUreaImportMT = sum(v)) %>% 
+  mutate(Dates = as.Date(Date))%>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% select(-"Date") %>% 
+  mutate(Country = "Malawi",
+         Year = year(Dates),
+         Month = month(Dates),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, MonthlyUreaImportMT))    
+    )%>%
+#Zambia montly import file is not right. there are no monthly labels. Summing to year
+rbind(
+  monthly_df %>%
+  left_join(read_excel("RawData/Zambia_IM.xlsx") %>%
+  group_by(Year) %>% 
+    summarise(MonthlyUreaImportMT = sum(vol)/12), by = "Year") %>%
+  group_by(Year) %>%
+  fill(MonthlyUreaImportMT, .direction = "downup") %>%
+  ungroup() %>%
+    mutate(Country = "Zambia",
+           key = paste0(Year, "-", Month, "-", Country)) %>%
+  select(c(key, MonthlyUreaImportMT))
+    )%>%
+rbind(
+  read_excel("RawData/Nigeria_IM.xlsx") %>%
+  mutate(Month = month(Date),
+           Year = year(Date),
+           Date = paste0(Year, "-", Month, "-", "01")) %>%
+  group_by(Date) %>% 
+  summarise(MonthlyUreaImportMT = sum(V)) %>% 
+  mutate(Dates = as.Date(Date))%>%
+  complete(Dates = seq.Date(min(Dates), max(Dates), by = "month")) %>%
+  replace_na(list(Import = 1)) %>% select(-"Date") %>% 
+  mutate(Country = "Nigeria",
+         Year = year(Dates),
+         Month = month(Dates),
+         key = paste0(Year, "-", Month, "-", Country)) %>% 
+  select(c(key, MonthlyUreaImportMT))    
+    ), by = 'key'
+) %>%
+ separate(key, into = c("Year", "Month", "Country"), sep = "-", remove = FALSE) %>% 
+    filter(Year >= 2010 & Year <= 2024) %>%
+  rename(WorldUrea = Urea)
+
+# We decided not to include maize yield on Thom's endogeneity worries.   
+# read_excel("RawData/Ghana National Staple Food Yield.xls") %>% 
+#   rbind(read_excel("RawData/Kenya National Staple Food Yield.xls")) %>% 
+#   rbind(read_excel("RawData/Malawi National Staple Food Yield.xls")) %>% 
+#   rbind(read_excel("RawData/Nigeria National Staple Food Yield.xls")) %>% 
+#   rbind(read_excel("RawData/Tanzania National Staple Food Yield.xls")) %>% 
+#   rbind(read_excel("RawData/Zambia National Staple Food Yield.xls")) %>% 
+#   filter(Item == "Maize (corn)",
+#          Year >= 2010,
+#          Year <= 2024) %>%
+#   select(c(Area, Year, Value)) %>%
+#   rename(Country = Area, MaizeYield = Value)
+data
 ```
 
-The `echo: false` option disables the printing of code (only output is displayed).
+RHS variables done. Now load LHS and join. 
+
+```{r}
+full_dates <- seq.Date(from = as.Date("2010-01-01"), to = as.Date("2024-12-01"), by = "month")
+
+DATA <- read_excel("RawData/retail-prices-Ghana.xlsx") %>% 
+  rbind(read_excel("RawData/retail-prices-Kenya.xlsx")) %>%
+  rbind(read_excel("RawData/retail-prices-Tanzania.xlsx")) %>%
+  rbind(read_excel("RawData/retail-prices-Zambia.xlsx")) %>%
+  rbind(read_excel("RawData/retail-prices-Nigeria.xlsx")) %>%
+  rbind(read_excel("RawData/retail-prices-Malawi.xlsx")) %>%
+  filter(Year >= 2010 & Year <= 2024) %>%
+  mutate(Month = replace_month(Month)) %>%
+  mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+  mutate(Fertilizer_Group = ifelse(grepl("NPK", `Fertilizer Product`), "NPK", `Fertilizer Product`)) %>%
+  group_by(key, Fertilizer_Group) %>%
+  summarize(Country = unique(Country), FertilizerPrice = mean(`Open Market Retail Price`, na.rm = TRUE), .groups = 'drop') %>%
+  filter(Fertilizer_Group == "NPK" | Fertilizer_Group == "Diammonium Phosphate" | Fertilizer_Group == "Urea") %>%
+  separate(key, into= c('Year', 'Month', 'Country'), sep = "-", remove = FALSE) %>%
+  mutate(date = ymd(paste(Year, Month, "01", sep = "-"))) %>%
+  arrange(Country, Fertilizer_Group, date) %>% 
+  ungroup() %>% 
+  group_by(Fertilizer_Group, Country) %>% 
+  complete(date = full_dates) %>%
+  ungroup()  %>% 
+  mutate(Year = year(date),
+         Month = month(date),
+         key = paste0(Year, "-", Month, "-", Country),
+         FertilizerPrice = 20*FertilizerPrice) %>%
+  select(key, Year, Month, Country, date, Fertilizer_Group, FertilizerPrice) %>%
+  pivot_wider(names_from = Fertilizer_Group, values_from = FertilizerPrice) %>% 
+ ungroup() %>% 
+  select(-c(Country, Year, Month, date)) %>% 
+
+full_join(
+  data, by = 'key'
+) %>% 
+  select(-key1)
+write.csv(DATA, file = "CleanData/DATA.csv")
+colnames(DATA)
+```
+
+```{r}
+# read_excel("RawData/retail-prices-Ghana.xlsx") %>% 
+#   rbind(read_excel("RawData/retail-prices-Kenya.xlsx"))%>% 
+#   rbind(read_excel("RawData/retail-prices-Tanzania.xlsx"))%>% 
+#   rbind(read_excel("RawData/retail-prices-Zambia.xlsx"))%>% 
+#   rbind(read_excel("RawData/retail-prices-Nigeria.xlsx"))%>% 
+#   rbind(read_excel("RawData/retail-prices-Malawi.xlsx")) %>%
+#   filter(Year >= 2010 & Year <= 2024) %>%
+#   mutate(Month = replace_month(Month)) %>%
+#   mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+#   mutate(Fertilizer_Group = ifelse(grepl("NPK", `Fertilizer Product`), "NPK", `Fertilizer Product`)) %>%
+#   group_by(key, Fertilizer_Group) %>%
+#   summarize(Country = unique(Country), FertilizerPrice = mean(`Open Market Retail Price`, na.rm = TRUE), .groups = 'drop') %>% 
+#   filter(Fertilizer_Group == "NPK" | Fertilizer_Group == "Diammonium Phosphate" | Fertilizer_Group == "Urea") %>%
+#   separate(key, into= c('Year', 'Month'), sep = "-", remove = FALSE) %>% 
+#   mutate(date = ymd(paste(Year, Month, "01", sep = "-"))) %>% 
+#   arrange(Country, Fertilizer_Group, date) %>%
+#   group_by(Fertilizer_Group, Country) %>%
+#   #mutate(FertilizerPrice = na.approx(FertilizerPrice)) %>% 
+#   pivot_wider(names_from = Fertilizer_Group, values_from = FertilizerPrice) %>%
+#   ungroup() %>% 
+#   filter(Country == "Kenya")
+
+
+```
+
+```{r}
+# library(dplyr)
+# library(tidyr)
+# library(lubridate)
+# 
+# # Example of reading and combining the Excel files
+# full_join(full_dates, 
+# read_excel("RawData/retail-prices-Ghana.xlsx") %>% 
+#   rbind(read_excel("RawData/retail-prices-Kenya.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Tanzania.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Zambia.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Nigeria.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Malawi.xlsx")) %>%
+#   filter(Year >= 2010 & Year <= 2024) %>%
+#   mutate(Month = replace_month(Month)) %>%
+#   mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+#   mutate(Fertilizer_Group = ifelse(grepl("NPK", `Fertilizer Product`), "NPK", `Fertilizer Product`)) %>%
+#   group_by(key, Fertilizer_Group) %>%
+#   summarize(Country = unique(Country), FertilizerPrice = mean(`Open Market Retail Price`, na.rm = TRUE), .groups = 'drop') %>%
+#   filter(Fertilizer_Group == "NPK" | Fertilizer_Group == "Diammonium Phosphate" | Fertilizer_Group == "Urea") %>%
+#   separate(key, into= c('Year', 'Month', 'Country'), sep = "-") %>%
+#   mutate(date = ymd(paste(Year, Month, "01", sep = "-"))) %>%
+#   arrange(Country, Fertilizer_Group, date), , by = c("Country", "Fertilizer_Group", "date")) %>%
+#   arrange(Country, Fertilizer_Group, date) %>%
+#   mutate(Year = year(date), Month = month(date)) %>%
+#   select(Year, Month, Country, date, Fertilizer_Group, FertilizerPrice) %>%
+#   pivot_wider(names_from = Fertilizer_Group, values_from = FertilizerPrice) %>% 
+#   mutate(Urea = na.approx(Urea, na.rm = FALSE ),
+#          NPK = na.approx(NPK, na.rm = FALSE ),
+#          `Diammonium Phosphate` = na.approx(`Diammonium Phosphate`, na.rm = FALSE )) 
+# 
+# 
+# 
+# # Full join with the combined data to ensure all dates are present
+# complete_data <- full_dates %>%
+#   full_join(data_combined, by = c("Country", "Fertilizer_Group", "date")) %>%
+#   arrange(Country, Fertilizer_Group, date)
+# 
+# # Fill Year and Month columns based on date
+# complete_data <- complete_data %>%
+#   mutate(Year = year(date), Month = month(date)) %>%
+#   select(Year, Month, Country, date, Fertilizer_Group, FertilizerPrice)
+# 
+# # Pivot wider
+# complete_data_wide <- complete_data %>%
+#   pivot_wider(names_from = Fertilizer_Group, values_from = FertilizerPrice)
+# 
+# # Print the result
+# print(complete_data_wide)
+# complete_data_wide  %>% 
+#   mutate(Urea = na.approx(Urea, na.rm = FALSE )) 
+```
+
+
+```{r}
+# read_excel("RawData/retail-prices-Ghana.xlsx") %>% 
+#   rbind(read_excel("RawData/retail-prices-Kenya.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Tanzania.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Zambia.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Nigeria.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Malawi.xlsx")) %>%
+#   filter(Year >= 2010 & Year <= 2024) %>%
+#   mutate(Month = replace_month(Month)) %>%
+#   mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+#   mutate(Fertilizer_Group = ifelse(grepl("NPK", `Fertilizer Product`), "NPK", `Fertilizer Product`)) %>%
+#   group_by(key, Fertilizer_Group) %>%
+#   summarize(Country = unique(Country), FertilizerPrice = mean(`Open Market Retail Price`, na.rm = TRUE), .groups = 'drop') %>%
+#   filter(Fertilizer_Group == "NPK" | Fertilizer_Group == "Diammonium Phosphate" | Fertilizer_Group == "Urea") %>%
+#   separate(key, into= c('Year', 'Month', 'Country'), sep = "-", remove = FALSE) %>%
+#   mutate(date = ymd(paste(Year, Month, "01", sep = "-"))) %>%
+#   arrange(Country, Fertilizer_Group, date) %>% 
+#   filter(Fertilizer_Group == "Urea")
+
+```
+
+```{r}
+# full_dates <- seq.Date(from = as.Date("2010-01-01"), to = as.Date("2024-12-01"), by = "month")
+# 
+# read_excel("RawData/retail-prices-Ghana.xlsx") %>% 
+#   rbind(read_excel("RawData/retail-prices-Kenya.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Tanzania.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Zambia.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Nigeria.xlsx")) %>%
+#   rbind(read_excel("RawData/retail-prices-Malawi.xlsx")) %>%
+#   filter(Year >= 2010 & Year <= 2024) %>%
+#   mutate(Month = replace_month(Month)) %>%
+#   mutate(key = paste0(Year, "-", Month, "-", Country)) %>%
+#   mutate(Fertilizer_Group = ifelse(grepl("NPK", `Fertilizer Product`), "NPK", `Fertilizer Product`)) %>%
+#   group_by(key, Fertilizer_Group) %>%
+#   summarize(Country = unique(Country), FertilizerPrice = mean(`Open Market Retail Price`, na.rm = TRUE), .groups = 'drop') %>%
+#   filter(Fertilizer_Group == "NPK" | Fertilizer_Group == "Diammonium Phosphate" | Fertilizer_Group == "Urea") %>%
+#   separate(key, into= c('Year', 'Month', 'Country'), sep = "-", remove = FALSE) %>%
+#   mutate(date = ymd(paste(Year, Month, "01", sep = "-"))) %>%
+#   arrange(Country, Fertilizer_Group, date) %>% 
+#   ungroup() %>% 
+#   group_by(Fertilizer_Group, Country) %>% 
+#   complete(date = full_dates) %>%
+#   ungroup()  %>% 
+#   mutate(Year = year(date),
+#          Month = month(date),
+#          key = paste0(Year, "-", Month, "-", Country)) %>%
+#   select(key, Year, Month, Country, date, Fertilizer_Group, FertilizerPrice) %>%
+#   pivot_wider(names_from = Fertilizer_Group, values_from = FertilizerPrice) %>% 
+#  ungroup() %>% 
+#   select(-c(Country, Year, Month, date)) %>% 
+# 
+# full_join(
+#   data, by = 'key'
+# ) %>% 
+#   select(-key1)
+# write.csv(DATA, file = "CleanData/DATA.csv")
+# colnames(DATA)
+
+  
+```
+
