@@ -82,6 +82,7 @@ for (column_name in columns_to_plot) {
 }
 ```
 
+
 ```{r}
 DATA_Fill %>% 
   mutate(ym = paste0(Year, Month)) %>%
@@ -89,3 +90,45 @@ DATA_Fill %>%
   pivot_wider(names_from = Country, values_from = WorldUrea)
 ```
 A note about the plots. If you look at WorldUrea and WorldUreaFilled ,you will see at the end of hte sample they look quite different. This is becasue there is some country Tanzania that we have fertilizer data for through 2023/2024, that creates a lot of na's for other countries during those time periods, and in the join, the world variables fill as na's for those countries. In short, it is caused by differing lengths of some variable across countries and then joins with the 'world' variables. If this is an issue, just filter the dataframe to the timeframe of the study and it will look fine.  
+
+
+# Summary Stats
+
+```{r}
+DATA <- read.csv("CleanData/DATA.csv") %>% 
+  select(-c( X, Year, Month)) %>%
+  separate(key, into = c("Year", "Month", "Country"), sep = "-", remove = FALSE) %>% 
+  group_by(Country) %>%
+  arrange(Country, as.numeric(Year), as.numeric(Month)) %>% 
+  mutate(Urea = na.approx(Urea, na.rm = FALSE),
+         NPK = na.approx(NPK, na.rm = FALSE),
+         Diammonium.Phosphate = na.approx(Diammonium.Phosphate, na.rm = FALSE)) %>%
+  filter(Year >= 2010 & Year <= 2023) %>%
+  drop_na(Urea)
+
+```
+
+
+
+```{r}
+summary_stats <- DATA %>% 
+  separate(key, into = c("Year", "Month", "Country"), sep = "-", convert = TRUE, remove = FALSE) %>%
+  group_by(Country) %>%  
+  select(-c( key, Year, Month)) %>%
+  mutate(UreaUSD = Urea/ExchangeRate) %>% 
+  summarise(
+    across(everything(), list(
+      mean = ~ mean(., na.rm = TRUE),
+      #median = ~ median(., na.rm = TRUE),
+      sd = ~ sd(., na.rm = TRUE) #,
+      #min = ~ min(., na.rm = TRUE),
+      #max = ~ max(., na.rm = TRUE),
+      #n = ~ sum(!is.na(.))
+    ))
+  ) %>%
+  pivot_longer(cols = -Country, names_to = c("variable", ".value"), names_sep = "_") %>% 
+  pivot_wider(names_from = Country, values_from = c(mean, sd))
+
+write.csv(summary_stats, file = 'summary_stats.csv')
+```
+
